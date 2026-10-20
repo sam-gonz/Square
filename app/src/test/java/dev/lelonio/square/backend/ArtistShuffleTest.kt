@@ -81,4 +81,16 @@ class ArtistShuffleTest {
         assertEquals(1, subsequent.size)
         assertEquals("ytmusic:track:3", subsequent[0].uri)
     }
+
+    @Test
+    fun shuffleAppendPreservesExistingUpcomingQueueOrder() {
+        val existingOrder = mutableListOf(3, 1, 4, 0, 2)
+        val addedIndices = (5 until 8).toList()
+        val newTracksShuffled = addedIndices.shuffled()
+
+        existingOrder.addAll(newTracksShuffled)
+
+        assertEquals(listOf(3, 1, 4, 0, 2), existingOrder.take(5))
+        assertEquals(setOf(5, 6, 7), existingOrder.drop(5).toSet())
+    }
 }

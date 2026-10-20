@@ -39,10 +39,6 @@ class TimelineQueueOrderTest {
     fun repeatAllWrapsOnceAndDoesNotDuplicateCurrentInHistory() {
         assertEquals(
             listOf(
-                VisibleQueueIndex(1, true),
-                VisibleQueueIndex(2, true),
-                VisibleQueueIndex(3, true),
-                VisibleQueueIndex(4, true),
                 VisibleQueueIndex(0, false),
                 VisibleQueueIndex(1, false),
                 VisibleQueueIndex(2, false),
@@ -63,5 +59,12 @@ class TimelineQueueOrderTest {
             ),
             repeatAllVisibleOrder(listOf(0, 1, 2, 3, 4), 2, historyCount = 2),
         )
+    }
+
+    @Test
+    fun startOfQueueHasNoPlayedHistory() {
+        val result = repeatAllVisibleOrder(listOf(3, 1, 4, 0, 2), 3, historyCount = 5)
+        assertEquals(listOf(3, 1, 4, 0, 2), result.map { it.index })
+        assertEquals(listOf(false, false, false, false, false), result.map { it.played })
     }
 }

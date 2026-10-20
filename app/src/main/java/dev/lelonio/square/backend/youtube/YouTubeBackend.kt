@@ -682,26 +682,23 @@ class YouTubeBackend(private val account: YouTubeAccount) : MusicBackend {
             }
         }
 
-        val shuffledRemaining = remainingAlbums.shuffled()
-        for (chunk in shuffledRemaining.chunked(3)) {
-            val chunkTracks = withContext(Dispatchers.IO) {
-                coroutineScope {
-                    chunk.map { album ->
-                        async {
-                            gate.withPermit {
-                                fetchAlbumCatalogTracks(album, normalizedArtist, targetName)
-                            }
+        val remainingTracks = withContext(Dispatchers.IO) {
+            coroutineScope {
+                remainingAlbums.shuffled().map { album ->
+                    async {
+                        gate.withPermit {
+                            fetchAlbumCatalogTracks(album, normalizedArtist, targetName)
                         }
-                    }.awaitAll().flatten()
-                }
+                    }
+                }.awaitAll().flatten()
             }
-            val newTracks = filterArtistTracks(chunkTracks, normalizedArtist, targetName)
-                .filter { seenUris.add(it.uri) }
-                .shuffled()
+        }
+        val newTracks = filterArtistTracks(remainingTracks, normalizedArtist, targetName)
+            .filter { seenUris.add(it.uri) }
+            .shuffled()
 
-            if (newTracks.isNotEmpty()) {
-                emit(newTracks)
-            }
+        if (newTracks.isNotEmpty()) {
+            emit(newTracks)
         }
 
         if (initialBatch.isEmpty() && seenUris.isEmpty()) {

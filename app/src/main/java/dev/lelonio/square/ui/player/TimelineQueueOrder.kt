@@ -57,7 +57,7 @@ internal fun repeatAllVisibleOrder(
     val history = if (currentPosition > 0) {
         order.subList((currentPosition - historyCount).coerceAtLeast(0), currentPosition)
     } else {
-        order.drop(1).takeLast(historyCount)
+        emptyList()
     }
     val cycle = listOf(order[currentPosition]) + order.drop(currentPosition + 1) + order.take(currentPosition)
     return history.map { VisibleQueueIndex(it, true) } + cycle.map { VisibleQueueIndex(it, false) }

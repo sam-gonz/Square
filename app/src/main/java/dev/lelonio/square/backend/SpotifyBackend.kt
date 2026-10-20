@@ -303,21 +303,19 @@ class SpotifyBackend(private val container: SquareApplication) : MusicBackend {
         }
 
         val distinctRemaining = remainingAlbums.distinctBy { it.uri ?: it.id ?: it.name }.shuffled()
-        for (chunk in distinctRemaining.chunked(3)) {
-            val chunkTracks = coroutineScope {
-                chunk.map { album ->
-                    async {
-                        gate.withPermit { loadAlbumTracks(album) }
-                    }
-                }.awaitAll().flatten()
-            }
-            val newTracks = filterArtist(chunkTracks)
-                .filter { seenUris.add(it.uri) }
-                .shuffled()
+        val remainingTracks = coroutineScope {
+            distinctRemaining.map { album ->
+                async {
+                    gate.withPermit { loadAlbumTracks(album) }
+                }
+            }.awaitAll().flatten()
+        }
+        val newTracks = filterArtist(remainingTracks)
+            .filter { seenUris.add(it.uri) }
+            .shuffled()
 
-            if (newTracks.isNotEmpty()) {
-                emit(newTracks)
-            }
+        if (newTracks.isNotEmpty()) {
+            emit(newTracks)
         }
 
         if (initialBatch.isEmpty() && seenUris.isEmpty()) {

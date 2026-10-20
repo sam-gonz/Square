@@ -957,7 +957,6 @@ fun SquareApp(
     var fullShuffleUri by remember { mutableStateOf<String?>(null) }
     var fullShuffleJob by remember { mutableStateOf<kotlinx.coroutines.Job?>(null) }
     var fullShuffleRequest by remember { mutableStateOf(0) }
-    val shuffleLoadingText = stringResource(R.string.shuffle_loading)
     val shuffleEmptyText = stringResource(R.string.shuffle_empty)
     val shuffleFailedText = stringResource(R.string.shuffle_failed)
     fun startFullShuffle(uri: String, name: String, artist: Boolean) {
@@ -965,7 +964,6 @@ fun SquareApp(
         val request = fullShuffleRequest + 1
         fullShuffleRequest = request
         fullShuffleUri = uri
-        android.widget.Toast.makeText(context, shuffleLoadingText, android.widget.Toast.LENGTH_SHORT).show()
         fullShuffleJob = scope.launch {
             try {
                 if (artist) {
@@ -980,7 +978,7 @@ fun SquareApp(
                                     fullShuffleUri = null
                                 }
                                 player?.shuffleModeEnabled = true
-                                onPlay(batch, batch.indices.random(), null, false, name, 0L)
+                                onPlay(batch, 0, null, false, name, 0L)
                             }
                         } else if (batch.isNotEmpty()) {
                             onEnqueueAll(batch)
@@ -992,7 +990,7 @@ fun SquareApp(
                         android.widget.Toast.makeText(context, shuffleEmptyText, android.widget.Toast.LENGTH_LONG).show()
                     } else {
                         player?.shuffleModeEnabled = true
-                        onPlay(tracks, tracks.indices.random(), null, false, name, 0L)
+                        onPlay(tracks, 0, null, false, name, 0L)
                     }
                 }
             } catch (cancelled: kotlinx.coroutines.CancellationException) {
@@ -3484,30 +3482,6 @@ fun SquareApp(
                     exit = androidx.compose.animation.fadeOut(androidx.compose.animation.core.tween(420)),
                 ) {
                     dev.lelonio.square.ui.player.DjStarting()
-                }
-
-                androidx.compose.animation.AnimatedVisibility(
-                    visible = fullShuffleUri != null,
-                    enter = androidx.compose.animation.fadeIn(androidx.compose.animation.core.tween(180)),
-                    exit = androidx.compose.animation.fadeOut(androidx.compose.animation.core.tween(220)),
-                ) {
-                    Row(
-                        Modifier
-                            .align(Alignment.BottomCenter)
-                            .padding(bottom = 112.dp)
-                            .clip(RoundedCornerShape(24.dp))
-                            .background(Color.Black.copy(alpha = 0.78f))
-                            .padding(horizontal = 18.dp, vertical = 14.dp),
-                        horizontalArrangement = Arrangement.spacedBy(12.dp),
-                        verticalAlignment = Alignment.CenterVertically,
-                    ) {
-                        androidx.compose.material3.CircularProgressIndicator(
-                            modifier = Modifier.size(20.dp),
-                            color = Color.White,
-                            strokeWidth = 2.dp,
-                        )
-                        Text(shuffleLoadingText, color = Color.White, style = MaterialTheme.typography.labelLarge)
-                    }
                 }
 
                 }
