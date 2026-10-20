@@ -322,6 +322,14 @@
     <string name="update_install">Install</string>
     <string name="download_get_app">Get YTDLnis</string>
     <string name="download_with">Download with YTDLnis</string>
+    <string name="dj_mode">DJ mode</string>
+    <string name="dj_mode_enable">Enable DJ mode</string>
+    <string name="dj_mode_note">Blend into the next song before the current one ends, using your crossfade duration. Follows the queue and shuffle order. Songs under 90 seconds play in full. Repeat one and the end-of-song sleep timer keep the whole song.</string>
+    <string name="dj_mode_needs_crossfade">Choose a crossfade duration above to use DJ mode. With crossfade off, songs play in full.</string>
+    <string name="dj_timing_balanced" formatted="false">Random: 65–85% of the song</string>
+    <string name="dj_timing_early" formatted="false">Random: 50–70% of the song</string>
+    <string name="dj_timing_late" formatted="false">Random: 75–90% of the song</string>
+    <string name="dj_timing_three_quarters" formatted="false">At 75% of the song</string>
     <string name="crossfade">Crossfade</string>
     <string name="crossfade_off">Off</string>
     <string name="crossfade_seconds">%1$d seconds</string>

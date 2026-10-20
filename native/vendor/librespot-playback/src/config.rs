@@ -186,6 +186,10 @@ pub struct PlayerConfig {
     /// nothing between them. See `player.rs`.
     pub crossfade_duration_ms: u32,
 
+    /// LOCAL PATCH: optional early transition range, as percentages of a song.
+    /// None preserves full-length playback. The app supplies 50..=95.
+    pub auto_dj_range: Option<(u8, u8)>,
+
     /// LOCAL PATCH: where the loader asks whether a track is already on disk.
     ///
     /// `None`, the default, is upstream behaviour: every track is fetched.
@@ -233,6 +237,7 @@ impl Default for PlayerConfig {
             position_update_interval: None,
             local_file_directories: Vec::new(),
             crossfade_duration_ms: 0,
+            auto_dj_range: None,
             download_lookup: None,
             downloads_only: None,
             trim_silence: true,

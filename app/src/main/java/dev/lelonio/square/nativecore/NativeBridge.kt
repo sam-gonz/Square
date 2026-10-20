@@ -228,6 +228,9 @@ object NativeBridge {
      */
     fun setSkipFade(ms: Int) = nativeSetSkipFade(ms)
 
+    fun setDjMode(enabled: Boolean, minPercent: Int, maxPercent: Int) =
+        nativeSetDjMode(enabled, minPercent, maxPercent)
+
     /**
      * The language Spotify should answer in, on a session already running.
      *
@@ -515,6 +518,7 @@ object NativeBridge {
     private external fun nativeIsConnected(): Boolean
     private external fun nativeSpircLost(): Boolean
     private external fun nativeSetQuality(bitrateKbps: Int, crossfadeMs: Int)
+    private external fun nativeSetDjMode(enabled: Boolean, minPercent: Int, maxPercent: Int)
 
     private external fun nativeSetBitrate(bitrateKbps: Int)
     private external fun nativeSetTrimSilence(enabled: Boolean)

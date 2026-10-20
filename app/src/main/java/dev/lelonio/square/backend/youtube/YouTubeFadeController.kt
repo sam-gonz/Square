@@ -38,6 +38,7 @@ class YouTubeFadeController(
     private val mixer: PcmMixer,
     private val mainSlot: MixerSlot,
     private val tailSlot: MixerSlot,
+    private val djModeStore: dev.lelonio.square.data.DjModeStore? = null,
     private val createOutgoing: () -> ExoPlayer,
 ) : Player.Listener {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
@@ -47,6 +48,7 @@ class YouTubeFadeController(
     private var preparedItem: MediaItem? = null
     private var changing = false
     private var internalChange = false
+    private val djPlanner = dev.lelonio.square.data.DjTransitionPlanner()
 
     /** Which transition owns the state; bumped by every new one and every cancel. */
     private var generations = 0
@@ -85,6 +87,7 @@ class YouTubeFadeController(
     }
 
     override fun onMediaItemTransition(mediaItem: MediaItem?, reason: Int) {
+        djPlanner.reset()
         if (!internalChange) cancelOverlap()
     }
 
@@ -133,14 +136,23 @@ class YouTubeFadeController(
             if (preparedItem != null) cancelOverlap()
             return
         }
-        val remaining = player.duration - player.currentPosition
-        if (player.duration <= fadeMs || remaining <= 0) return
+        val duration = player.duration
+        val position = player.currentPosition
+        if (duration <= fadeMs || position >= duration || player.isCurrentMediaItemLive) return
+        val djAt = if (player.repeatMode != Player.REPEAT_MODE_ONE) {
+            djPlanner.transitionAt(
+                duration, fadeMs, position,
+                djModeStore?.settings?.value ?: dev.lelonio.square.data.DjModeSettings(),
+            )
+        } else null
+        val transitionAt = djAt ?: (duration - fadeMs)
+        val untilTransition = transitionAt - position
         val next = if (player.repeatMode == Player.REPEAT_MODE_ONE) player.currentMediaItemIndex
             else player.nextMediaItemIndex
         if (next < 0) return
         // Resolve and buffer the tail ahead of time, without making it audible.
-        if (remaining <= fadeMs + 5_000) prepareOutgoing()
-        if (remaining <= fadeMs && outgoing?.playbackState == Player.STATE_READY) {
+        if (untilTransition <= 5_000) prepareOutgoing()
+        if (untilTransition <= 0 && outgoing?.playbackState == Player.STATE_READY) {
             changeWith(fadeMs) { player.seekToDefaultPosition(next) }
         }
     }

@@ -595,6 +595,16 @@ class PlaybackService : MediaLibraryService() {
             crossfade.seconds.drop(1).collect { reconfigureEngine("crossfade") }
         }
 
+        scope.launch {
+            container.djMode.settings.collect { settings ->
+                if (engineStarted) withContext(Dispatchers.IO) {
+                    runCatching {
+                        NativeBridge.setDjMode(settings.enabled, settings.timing.minPercent, settings.timing.maxPercent)
+                    }.onFailure { android.util.Log.w(TAG, "cannot update DJ mode", it) }
+                }
+            }
+        }
+
         // Playback handed to this phone from another client's device list.
         //
         // The engine obeys that transfer on its own and starts playing, so the
@@ -981,6 +991,7 @@ class PlaybackService : MediaLibraryService() {
      */
     private fun switchBackend(backendId: dev.lelonio.square.backend.BackendId) = scope.launch {
         swapPlayer(kindFor(backendId))
+        session?.let(browseTree::sourceChanged)
     }
 
     /** The swap itself; see [switchBackend] and [ensurePlayerFor]. */
@@ -1508,6 +1519,8 @@ class PlaybackService : MediaLibraryService() {
             withContext(Dispatchers.IO) {
                 runCatching {
                     NativeBridge.setSkipFade(container.preferences.skipFadeMs())
+                    val dj = container.djMode.settings.value
+                    NativeBridge.setDjMode(dj.enabled, dj.timing.minPercent, dj.timing.maxPercent)
                 }
             }
         }.onFailure { error ->

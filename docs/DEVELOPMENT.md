@@ -60,14 +60,14 @@ ahead of the audio.
 
 Requirements:
 
-- Android Studio with SDK platform 35 and **NDK 28.2.13676358**
+- JDK 17 or later, Android Studio with SDK platform **37.0** and **NDK 28.2.13676358**
 - Rust ≥ 1.86 with the Android targets
 - `cargo-ndk`
 
 ```bash
 rustup target add aarch64-linux-android armv7-linux-androideabi x86_64-linux-android
 cargo install cargo-ndk
-sdkmanager --install "ndk;28.2.13676358"
+sdkmanager --install "platforms;android-37.0" "build-tools;35.0.0" "ndk;28.2.13676358"
 ```
 
 Then:
@@ -79,6 +79,24 @@ Then:
 The `cargoBuild` task cross-compiles the core and copies the `.so` files into
 `app/src/main/jniLibs`. To iterate faster, cut `nativeAbis` in
 `app/build.gradle.kts` down to `arm64-v8a`.
+
+For JVM unit tests, including the DJ transition planner, the Rust Android
+cross-build can be skipped:
+
+```bash
+./gradlew :app:testDebugUnitTest -x cargoBuild
+cargo check --locked --manifest-path native/Cargo.toml
+```
+
+The native DJ planner also has isolated tests that do not need an Android SDK:
+
+```bash
+rustc --edition=2024 --test native/vendor/librespot-playback/src/auto_dj.rs -o /tmp/square-auto-dj-tests
+/tmp/square-auto-dj-tests
+```
+
+Playback transitions and the car interface need device testing as described
+in [Android Auto](ANDROID_AUTO.md).
 
 ## Signing a release build
 

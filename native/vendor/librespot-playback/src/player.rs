@@ -250,6 +250,9 @@ struct PlayerInternal {
     /// LOCAL PATCH: the play request that has been heard playing before its own
     /// fade window, and so may have its end announced early. See the use of it.
     fade_armed: Option<u64>,
+    /// LOCAL PATCH: early transitions, sampled once per play request.
+    auto_dj: crate::auto_dj::AutoDj,
+    repeat_track: bool,
     /// LOCAL PATCH: consecutive silent samples observed near end of track for silence trimming.
     consecutive_silent_samples: usize,
     /// LOCAL PATCH: how many times a play request has had its stream run out
@@ -393,6 +396,8 @@ enum PlayerCommand {
     SetHoldEnd(bool),
     /// LOCAL PATCH: see PlayerConfig::skip_fade_ms.
     SetSkipFade(u32),
+    /// LOCAL PATCH: optional early transition range, without rebuilding audio.
+    SetAutoDj(Option<(u8, u8)>),
     EmitSessionDisconnectedEvent {
         connection_id: String,
         user_name: String,
@@ -777,6 +782,8 @@ impl Player {
                 fade_out: None,
                 early_end: None,
                 fade_armed: None,
+                auto_dj: crate::auto_dj::AutoDj::default(),
+                repeat_track: false,
                 consecutive_silent_samples: 0,
                 short_end: None,
                 ended: None,
@@ -916,6 +923,10 @@ impl Player {
     /// LOCAL PATCH: see PlayerConfig::skip_fade_ms.
     pub fn set_skip_fade(&self, ms: u32) {
         self.command(PlayerCommand::SetSkipFade(ms));
+    }
+
+    pub fn set_auto_dj(&self, range: Option<(u8, u8)>) {
+        self.command(PlayerCommand::SetAutoDj(range));
     }
 
     pub fn emit_filter_explicit_content_changed_event(&self, filter: bool) {
@@ -2324,6 +2335,7 @@ impl Future for PlayerInternal {
                 };
             }
 
+            let this = &mut *self;
             if let PlayerState::Playing {
                 ref track_id,
                 play_request_id,
@@ -2341,17 +2353,33 @@ impl Future for PlayerInternal {
                 ref mut stream_loader_controller,
                 ref mut suggested_to_preload_next_track,
                 ..
-            } = self.state
+            } = this.state
             {
                 let track_id = track_id.clone();
 
+                let crossfade_ms = this.config.crossfade_duration_ms;
+                let dj_range = this.config.auto_dj_range.filter(|_| {
+                    matches!(track_id, SpotifyUri::Track { .. } | SpotifyUri::Local { .. })
+                });
+                let planned_dj_at = this.auto_dj.transition_at(
+                    play_request_id, duration_ms, crossfade_ms, stream_position_ms, dj_range,
+                    |min, max| {
+                        use rand::{Rng, SeedableRng};
+                        rand::rngs::SmallRng::from_os_rng().random_range(min..=max)
+                    },
+                );
+                let dj_at = planned_dj_at.filter(|_| {
+                    !this.repeat_track && !this.config.hold_end && !narrating()
+                });
+                let transition_at = dj_at.unwrap_or(duration_ms.saturating_sub(crossfade_ms));
+
                 if (!*suggested_to_preload_next_track)
-                    && ((duration_ms as i64 - stream_position_ms as i64)
+                    && ((dj_at.unwrap_or(duration_ms) as i64 - stream_position_ms as i64)
                         < PRELOAD_NEXT_TRACK_BEFORE_END_DURATION_MS as i64)
-                    && stream_loader_controller.range_to_end_available()
+                    && (dj_at.is_some() || stream_loader_controller.range_to_end_available())
                 {
                     *suggested_to_preload_next_track = true;
-                    self.send_event(PlayerEvent::TimeToPreloadNextTrack {
+                    this.send_event(PlayerEvent::TimeToPreloadNextTrack {
                         track_id: track_id.clone(),
                         play_request_id,
                     });
@@ -2366,16 +2394,16 @@ impl Future for PlayerInternal {
                 // still reading this track is handed to `fade_out` instead of
                 // being dropped. Nothing here decides what plays next, which is
                 // what keeps the Connect device the only thing that does.
-                let crossfade_ms = self.config.crossfade_duration_ms as i64;
+                let crossfade_ms = this.config.crossfade_duration_ms as i64;
                 let position = stream_position_ms as i64;
                 let duration = duration_ms as i64;
-                if crossfade_ms > 0 && duration > crossfade_ms && !self.config.hold_end && !narration_follows(&track_id) {
+                if crossfade_ms > 0 && duration > crossfade_ms && !this.config.hold_end && !narration_follows(&track_id) {
                     let silence_threshold_samples = (SAMPLE_RATE as usize * NUM_CHANNELS as usize * 350) / 1000;
-                    let trailing_silence = self.config.trim_silence
-                        && self.consecutive_silent_samples >= silence_threshold_samples
+                    let trailing_silence = this.config.trim_silence
+                        && this.consecutive_silent_samples >= silence_threshold_samples
                         && position >= duration - crossfade_ms - 2000;
 
-                    if position < duration - crossfade_ms && !trailing_silence {
+                    if position < i64::from(transition_at) && !trailing_silence {
                         // LOCAL PATCH: the track has been heard playing outside
                         // its own ending, so its ending means something.
                         //
@@ -2390,10 +2418,14 @@ impl Future for PlayerInternal {
                         // it knows — that the song is over. Armed here, this
                         // can only happen to a track that was playing normally
                         // a moment ago.
-                        self.fade_armed = Some(play_request_id);
-                    } else if self.early_end != Some(play_request_id)
-                        && self.fade_armed == Some(play_request_id)
-                        && self.state.is_playing()
+                        this.fade_armed = Some(play_request_id);
+                    } else if this.early_end != Some(play_request_id)
+                        && this.fade_armed == Some(play_request_id)
+                        && this.state.is_playing()
+                        // DJ mode only shortens a song when its successor is
+                        // ready. A last song, or a slow preload, keeps playing.
+                        && (dj_at.is_none() || position >= duration - crossfade_ms
+                            || matches!(this.preload, PlayerPreload::Ready { .. }))
                     {
                         if trailing_silence {
                             info!(
@@ -2404,8 +2436,8 @@ impl Future for PlayerInternal {
                                 "crossfade: {position} ms of {duration} ms played, announcing the end of <{track_id:?}>"
                             );
                         }
-                        self.early_end = Some(play_request_id);
-                        self.announce_end(track_id, play_request_id);
+                        this.early_end = Some(play_request_id);
+                        this.announce_end(track_id, play_request_id);
                     }
                 }
             }
@@ -3593,6 +3625,7 @@ impl PlayerInternal {
             }
 
             PlayerCommand::EmitRepeatChangedEvent { context, track } => {
+                self.repeat_track = track;
                 self.send_event(PlayerEvent::RepeatChanged { context, track })
             }
 
@@ -3659,6 +3692,10 @@ impl PlayerInternal {
             PlayerCommand::SetSkipFade(ms) => {
                 info!("skip_fade_ms is now {ms}");
                 self.config.skip_fade_ms = ms;
+            }
+
+            PlayerCommand::SetAutoDj(range) => {
+                self.config.auto_dj_range = range;
             }
 
             PlayerCommand::SetHoldEnd(enabled) => {
@@ -3878,6 +3915,7 @@ impl fmt::Debug for PlayerCommand {
                 f.debug_tuple("SetTrimSilence").field(enabled).finish()
             }
             PlayerCommand::SetSkipFade(ms) => f.debug_tuple("SetSkipFade").field(ms).finish(),
+            PlayerCommand::SetAutoDj(range) => f.debug_tuple("SetAutoDj").field(range).finish(),
             PlayerCommand::SetHoldEnd(enabled) => {
                 f.debug_tuple("SetHoldEnd").field(enabled).finish()
             }

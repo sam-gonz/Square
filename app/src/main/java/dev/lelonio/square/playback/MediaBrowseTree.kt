@@ -18,15 +18,21 @@ import com.google.common.util.concurrent.Futures
 import com.google.common.util.concurrent.ListenableFuture
 import dev.lelonio.square.R
 import dev.lelonio.square.SquareApplication
+import dev.lelonio.square.backend.BackendId
+import dev.lelonio.square.backend.MusicBackend
+import dev.lelonio.square.backend.SearchLabels
+import dev.lelonio.square.backend.youtube.YouTubeBackend
 import dev.lelonio.square.data.Catalog
 import dev.lelonio.square.data.CatalogTrack
-import dev.lelonio.square.data.toCatalogTrack
+import dev.lelonio.square.data.LocalLibrary
 import dev.lelonio.square.nativecore.NativeBridge
 import dev.lelonio.square.ui.EXTRA_CONTEXT_LABEL
 import dev.lelonio.square.ui.EXTRA_CONTEXT_ORDERED
 import dev.lelonio.square.ui.EXTRA_CONTEXT_URI
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -104,9 +110,32 @@ class MediaBrowseTree(
 
     /** Playlist names, so a queue built from the car is labelled like one built in the app. */
     private val nodeLabels = mutableMapOf<String, String>()
+    private var sourceRefresh: Job? = null
 
     /** One catalogue read at a time: the car fires children requests in parallel. */
     private val lock = Mutex()
+
+    /** Refresh subscribed car screens when the source changes on the phone. */
+    fun sourceChanged(session: MediaLibrarySession) {
+        sourceRefresh?.cancel()
+        trackCache.clear()
+        nodeLabels.clear()
+        session.notifyChildrenChanged(ID_ROOT, 2, null)
+        sourceRefresh = scope.launch {
+            val source = app.activeBackend.id
+            val count = try {
+                childrenOf(ID_PLAYLISTS).size
+            } catch (error: CancellationException) {
+                throw error
+            } catch (error: Exception) {
+                android.util.Log.w(TAG, "cannot refresh car playlists", error)
+                0
+            }
+            if (app.activeBackend.id != source) return@launch
+            session.notifyChildrenChanged(ID_PLAYLISTS, count, null)
+            session.notifyChildrenChanged(ID_RECENT, recentTracks().size, null)
+        }
+    }
 
     /**
      * The buttons the car draws beside play and skip.
@@ -447,8 +476,9 @@ class MediaBrowseTree(
         )
 
         parentId == ID_PLAYLISTS -> {
-            if (!engineReady()) emptyList() else lock.withLock {
-                Catalog.playlists().map { playlist ->
+            val backend = app.activeBackend
+            if (!catalogueReady(backend.id)) emptyList() else lock.withLock {
+                backend.playlists().map { playlist ->
                     nodeLabels[playlist.uri] = playlist.name
                     browsable(
                         playlist.uri,
@@ -463,9 +493,9 @@ class MediaBrowseTree(
         // Local, so it answers even with no engine and no network — which is the
         // state the car is in for the first few seconds after it connects.
         parentId == ID_RECENT ->
-            app.recentStore.tracks.value.map { playable(ID_RECENT, it) }
+            recentTracks().map { playable(ID_RECENT, it) }
 
-        parentId.startsWith("spotify:") ->
+        parentId.startsWith("spotify:") || parentId.startsWith(YouTubeBackend.URI_SCHEME) ->
             tracksOf(parentId).map { playable(parentId, it) }
 
         else -> emptyList()
@@ -479,13 +509,16 @@ class MediaBrowseTree(
      * thousand of them while driving.
      */
     private suspend fun tracksOf(parentId: String): List<CatalogTrack> {
-        if (parentId == ID_RECENT) return app.recentStore.tracks.value
+        if (parentId == ID_RECENT) return recentTracks()
         trackCache[parentId]?.let { return it }
-        if (!engineReady()) return emptyList()
+        val youtube = parentId.startsWith(YouTubeBackend.URI_SCHEME)
+        if (!youtube && !parentId.startsWith("spotify:")) return emptyList()
+        if (!catalogueReady(if (youtube) BackendId.YOUTUBE_MUSIC else BackendId.SPOTIFY)) return emptyList()
 
         return lock.withLock {
             trackCache[parentId] ?: runCatching {
-                Catalog.tracks(Catalog.contextTrackUris(parentId).take(TRACK_LIMIT))
+                if (youtube) app.youtubeBackend.tracksOf(parentId).take(TRACK_LIMIT)
+                else Catalog.tracks(Catalog.contextTrackUris(parentId).take(TRACK_LIMIT))
             }.getOrElse {
                 android.util.Log.w(TAG, "tracks of $parentId failed: $it")
                 emptyList()
@@ -514,26 +547,27 @@ class MediaBrowseTree(
         pageSize: Int,
         params: LibraryParams?,
     ): ListenableFuture<LibraryResult<ImmutableList<MediaItem>>> = scope.future {
-        val node = searchNode(query)
-        val items = search(query).map { playable(node, it) }
+        val backend = app.activeBackend
+        val node = searchNode(query, backend.id)
+        val items = search(query, backend).map { playable(node, it) }
         val from = (page * pageSize).coerceAtMost(items.size)
         val to = (from + pageSize).coerceAtMost(items.size)
         LibraryResult.ofItemList(ImmutableList.copyOf(items.subList(from, to)), params)
     }
 
-    /**
-     * Search runs on the Web API, which is the only place Spotify exposes it —
-     * the access point has no search endpoint at all. It therefore needs the
-     * user's own registered application: without it the car gets nothing rather
-     * than an error it has no way to show.
-     */
-    private suspend fun search(query: String): List<CatalogTrack> {
-        val node = searchNode(query)
+    /** Uses the same source and search fallbacks as the phone. */
+    private suspend fun search(query: String, backend: MusicBackend = app.activeBackend): List<CatalogTrack> {
+        val node = searchNode(query, backend.id)
         trackCache[node]?.let { return it }
 
         val tracks = runCatching {
-            app.api.search(query, type = "track", limit = SEARCH_LIMIT)
-                .tracks?.items.orEmpty().map { it.toCatalogTrack() }
+            if (!catalogueReady(backend.id)) return@runCatching emptyList()
+            backend.search(query, SearchLabels(
+                artist = strings.getString(R.string.artist),
+                album = strings.getString(R.string.album),
+                playlist = strings.getString(R.string.playlist),
+                podcast = strings.getString(R.string.podcast),
+            )).tracks.take(SEARCH_LIMIT)
         }.getOrElse {
             android.util.Log.w(TAG, "search failed: $it")
             emptyList()
@@ -545,7 +579,13 @@ class MediaBrowseTree(
         return tracks
     }
 
-    private fun searchNode(query: String) = "$SEARCH_PREFIX$query"
+    private fun searchNode(query: String, backend: BackendId) =
+        "$SEARCH_PREFIX${backend.name}/$query"
+
+    private fun recentTracks(): List<CatalogTrack> {
+        val prefix = if (app.activeBackend.id == BackendId.YOUTUBE_MUSIC) YouTubeBackend.URI_SCHEME else "spotify:"
+        return app.recentStore.tracks.value.filter { it.uri.startsWith(prefix) || LocalLibrary.isLocal(it.uri) }
+    }
 
     // --- Playback -----------------------------------------------------------
 
@@ -566,10 +606,9 @@ class MediaBrowseTree(
         startIndex: Int,
         startPositionMs: Long,
     ): ListenableFuture<MediaSession.MediaItemsWithStartPosition> = scope.future {
-        ensurePlayerFor(
-            mediaItems.getOrNull(startIndex.coerceAtLeast(0))?.mediaId
-                ?: mediaItems.firstOrNull()?.mediaId,
-        )
+        val firstId = mediaItems.getOrNull(startIndex.coerceAtLeast(0))?.mediaId
+            ?: mediaItems.firstOrNull()?.mediaId
+        ensurePlayerFor(firstId?.let { splitTrackId(it)?.second ?: it })
 
         val single = mediaItems.singleOrNull()
         val parts = single?.mediaId?.let(::splitTrackId)
@@ -580,7 +619,13 @@ class MediaBrowseTree(
             )
 
         val (parentId, trackUri) = parts
-        val tracks = tracksOf(parentId)
+        val listed = tracksOf(parentId)
+        // Recent items can include local files, whose player cannot play the
+        // streaming entries (and vice versa). Expand only compatible entries.
+        val tracks = if (parentId == ID_RECENT) {
+            val local = LocalLibrary.isLocal(trackUri)
+            listed.filter { LocalLibrary.isLocal(it.uri) == local }
+        } else listed
         val index = tracks.indexOfFirst { it.uri == trackUri }
         if (index < 0) {
             return@future MediaSession.MediaItemsWithStartPosition(
@@ -698,12 +743,14 @@ class MediaBrowseTree(
      * list at that point is indistinguishable from an empty account, and Auto
      * caches what it is told.
      */
-    private suspend fun engineReady(): Boolean {
+    private suspend fun catalogueReady(backend: BackendId): Boolean {
+        // YouTube can browse/search without a Spotify session or a signed-in account.
+        if (backend == BackendId.YOUTUBE_MUSIC) return true
         repeat(CONNECT_TRIES) {
-            if (NativeBridge.isConnected) return true
+            if (NativeBridge.isConnected || app.webApi.isReady) return true
             delay(CONNECT_POLL_MS)
         }
-        return NativeBridge.isConnected
+        return NativeBridge.isConnected || app.webApi.isReady
     }
 
     private companion object {

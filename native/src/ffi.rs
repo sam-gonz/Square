@@ -575,6 +575,20 @@ pub extern "system" fn Java_dev_lelonio_square_nativecore_NativeBridge_nativeSet
     guard(&mut env, "SetBitrate", || engine::set_bitrate(bitrate_kbps));
 }
 
+/// Changes the early transition policy without rebuilding the player.
+#[no_mangle]
+pub extern "system" fn Java_dev_lelonio_square_nativecore_NativeBridge_nativeSetDjMode(
+    mut env: JNIEnv,
+    _class: JClass,
+    enabled: jboolean,
+    min_percent: jint,
+    max_percent: jint,
+) {
+    guard(&mut env, "SetDjMode", || {
+        engine::set_dj_mode(enabled != 0, min_percent, max_percent)
+    });
+}
+
 /// Changes whether silence trimming is enabled, with no rebuild.
 #[no_mangle]
 pub extern "system" fn Java_dev_lelonio_square_nativecore_NativeBridge_nativeSetTrimSilence(

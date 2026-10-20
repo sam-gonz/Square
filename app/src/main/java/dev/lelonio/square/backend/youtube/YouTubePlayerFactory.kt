@@ -127,7 +127,10 @@ object YouTubePlayerFactory {
                         }
                     }
                 })
-                val fades = YouTubeFadeController(exo, crossfadeStore, mixer, mainSlot, tailSlot) {
+                val fades = YouTubeFadeController(
+                    exo, crossfadeStore, mixer, mainSlot, tailSlot,
+                    (host.context.applicationContext as? dev.lelonio.square.SquareApplication)?.djMode,
+                ) {
                     buildPlayer(false, tailSlot)
                 }
                 val preferences = (host.context.applicationContext as? dev.lelonio.square.SquareApplication)

@@ -225,6 +225,10 @@ class SquareApplication : Application(), ImageLoaderFactory {
         dev.lelonio.square.data.CrossfadeStore(this)
     }
 
+    val djMode: dev.lelonio.square.data.DjModeStore by lazy {
+        dev.lelonio.square.data.DjModeStore(this)
+    }
+
     /** What language the app is read in, and what the engine asks Spotify for. */
     val language: LanguageStore by lazy { LanguageStore(this) }
 

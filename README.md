@@ -50,6 +50,10 @@
   queue or the position, and keep watching in picture-in-picture.
 - Radio from any song, and autoplay of similar songs when the queue ends.
 - Crossfade between songs, with an option to skip trailing silence.
+- Optional **DJ mode**: blend into the next song at a random point between
+  65% and 85% of the current song. Choose an earlier/later range or a fixed
+  75% point in **Settings → Playback → Listening → DJ mode**. Uses the
+  configured crossfade and follows the queue's shuffle setting. Off by default.
 - Sleep timer: after 5 to 60 minutes or at the end of the song, fading out
   before it stops.
 
@@ -96,6 +100,8 @@
 
 - Browse playlists and recently played, search by voice, like a song or start a
   radio from the car.
+- Browsing and search use the selected source, Spotify or YouTube Music.
+  See [Android Auto setup and testing](docs/ANDROID_AUTO.md) for APK installs.
 
 ### Look and language
 

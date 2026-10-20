@@ -1038,6 +1038,21 @@ pub fn set_bitrate(bitrate_kbps: i32) -> EngineResult<()> {
     Ok(())
 }
 
+/// Changes the early transition policy, kept in the recipe for reconnects.
+pub fn set_dj_mode(enabled: bool, min_percent: i32, max_percent: i32) -> EngineResult<()> {
+    if !(50..=95).contains(&min_percent) || !(min_percent..=95).contains(&max_percent) {
+        return Err("invalid DJ transition range".into());
+    }
+    let range = enabled.then_some((min_percent as u8, max_percent as u8));
+    let mut guard = ENGINE.lock().map_err(|_| "engine mutex poisoned")?;
+    let engine = guard.as_mut().ok_or("engine not started")?;
+    engine.recipe.player_config.auto_dj_range = range;
+    if let Some(bundle) = engine.bundle.as_ref() {
+        bundle.player.set_auto_dj(range);
+    }
+    Ok(())
+}
+
 /// Changes whether trailing silence near the end of a track triggers early crossfade.
 pub fn set_trim_silence(enabled: bool) -> EngineResult<()> {
     let mut guard = ENGINE.lock().map_err(|_| "engine mutex poisoned")?;

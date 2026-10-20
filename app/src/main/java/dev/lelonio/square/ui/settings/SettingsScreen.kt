@@ -2,6 +2,8 @@ package dev.lelonio.square.ui.settings
 
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.selection.selectable
+import androidx.compose.foundation.selection.toggleable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -31,6 +33,8 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.clearAndSetSemantics
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.draw.clip
 import androidx.activity.compose.rememberLauncherForActivityResult
@@ -110,6 +114,7 @@ import dev.lelonio.square.R
 import dev.lelonio.square.data.AppLanguages
 import dev.lelonio.square.backend.BackendId
 import dev.lelonio.square.data.CrossfadeSteps
+import dev.lelonio.square.data.DjTiming
 import dev.lelonio.square.data.EffectQuality
 import dev.lelonio.square.data.Quality
 import dev.lelonio.square.ui.MainViewModel
@@ -520,6 +525,10 @@ fun SettingsScreen(
 
         if (shown == SettingsPage.Playback && !sdkPlayback && "listening" in openGroups) groupItem("crossfade", Group.LISTENING) {
             CrossfadeSection(backdrop)
+        }
+
+        if (shown == SettingsPage.Playback && !sdkPlayback && "listening" in openGroups) groupItem("dj-mode", Group.LISTENING) {
+            DjModeSection()
         }
 
         // Autoplay: automatically append similar tracks when queue reaches the end.
@@ -1594,6 +1603,69 @@ private fun CrossfadeSection(backdrop: Backdrop) {
             color = InkDim,
             modifier = Modifier.padding(horizontal = 18.dp, vertical = 14.dp),
         )
+    }
+}
+
+@Composable
+private fun DjModeSection() {
+    val context = LocalContext.current
+    val app = remember(context) { context.applicationContext as dev.lelonio.square.SquareApplication }
+    val settings by app.djMode.settings.collectAsStateWithLifecycle()
+    val crossfadeSeconds by app.crossfade.seconds.collectAsStateWithLifecycle()
+
+    Section(stringResource(R.string.dj_mode)) {
+        Row(
+            Modifier.fillMaxWidth()
+                .toggleable(settings.enabled, role = Role.Switch, onValueChange = app.djMode::setEnabled)
+                .heightIn(min = 48.dp)
+                .padding(start = 18.dp, end = 12.dp, top = 12.dp, bottom = 12.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(12.dp),
+        ) {
+            RowIcon(PhosphorIcons.Regular.Waveform)
+            Text(stringResource(R.string.dj_mode_enable), style = MaterialTheme.typography.bodyLarge, modifier = Modifier.weight(1f))
+            Box(Modifier.clearAndSetSemantics {}) {
+                PlainToggle(settings.enabled, app.djMode::setEnabled)
+            }
+        }
+        Text(
+            stringResource(if (crossfadeSeconds > 0) R.string.dj_mode_note else R.string.dj_mode_needs_crossfade),
+            style = MaterialTheme.typography.bodySmall,
+            color = InkDim,
+            modifier = Modifier.padding(horizontal = 18.dp, vertical = 14.dp),
+        )
+        if (settings.enabled) {
+            DjTiming.entries.forEach { timing ->
+                RowDivider()
+                val selected = settings.timing == timing
+                Row(
+                    Modifier.fillMaxWidth()
+                        .selectable(selected = selected, role = Role.RadioButton) {
+                            app.djMode.setTiming(timing)
+                        }
+                        .heightIn(min = 48.dp)
+                        .padding(horizontal = 18.dp, vertical = 12.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(12.dp),
+                ) {
+                    Text(
+                        stringResource(when (timing) {
+                            DjTiming.BALANCED -> R.string.dj_timing_balanced
+                            DjTiming.EARLY -> R.string.dj_timing_early
+                            DjTiming.LATE -> R.string.dj_timing_late
+                            DjTiming.THREE_QUARTERS -> R.string.dj_timing_three_quarters
+                        }),
+                        style = MaterialTheme.typography.bodyLarge,
+                        color = if (selected) Ink else InkDim,
+                        modifier = Modifier.weight(1f),
+                    )
+                    if (selected) Icon(
+                        PhosphorIcons.Regular.Check, contentDescription = null,
+                        tint = MaterialTheme.colorScheme.primary, modifier = Modifier.size(18.dp),
+                    )
+                }
+            }
+        }
     }
 }
 

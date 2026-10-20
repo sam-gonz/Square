@@ -2,6 +2,7 @@
 build/
 app/build/
 .gradle/
+.kotlin/
 local.properties
 
 # Fetched, not vendored (see fetchBungee in app/build.gradle.kts)

@@ -42,7 +42,8 @@ val keystoreProperties = Properties().apply {
 
 android {
     namespace = "dev.lelonio.square"
-    compileSdk = 37
+    // AGP 8.13 resolves the base API 37 package by its full SDK identifier.
+    compileSdkVersion("android-37.0")
     ndkVersion = ndkVersionForCargo
 
     defaultConfig {

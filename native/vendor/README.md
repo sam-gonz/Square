@@ -133,6 +133,22 @@ the marker to look for is `LOCAL PATCH` in `src/config.rs`.
 Copy of [`librespot-playback` 0.8.0](https://github.com/librespot-org/librespot)
 (MIT, licence retained), wired in the same way.
 
+### Optional DJ mode
+
+`PlayerConfig.auto_dj_range` optionally sets the earliest/latest transition
+percentages. It defaults to `None`. `Player::set_auto_dj` updates this policy
+without rebuilding playback; the app keeps it in the engine recipe for
+reconnections. `src/auto_dj.rs` chooses one point per play request, preserving
+it through progress updates and seeks. The app's presets are 65–85%, 50–70%,
+75–90%, and a fixed 75%.
+
+Only songs of at least 90 seconds are eligible, and crossfade must be enabled.
+Repeat-one, the end-of-song sleep timer and narrated Spotify DJ sessions keep
+normal playback. Enabling/changing the mode after its new target does not
+immediately skip the song. The normal preload event is brought forward;
+an early transition waits for a prepared successor and uses the existing
+crossfade path. Song selection remains with the queue and its shuffle setting.
+
 ### The patch: crossfade
 
 Upstream plays one track at a time, start to finish, and the next one begins
