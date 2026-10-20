@@ -127,6 +127,19 @@ class PreferencesStore(context: Context) {
         prefs.edit().putString(KEY_PREFERRED_LYRICS, value).apply()
     }
 
+    private val _androidAutoLyrics = MutableStateFlow(prefs.getBoolean(KEY_ANDROID_AUTO_LYRICS, true))
+
+    /**
+     * Whether synchronized lyrics should be streamed to Android Auto (in the now playing
+     * metadata and as a navigable browse folder).
+     */
+    val androidAutoLyrics: StateFlow<Boolean> = _androidAutoLyrics.asStateFlow()
+
+    fun setAndroidAutoLyrics(value: Boolean) {
+        _androidAutoLyrics.value = value
+        prefs.edit().putBoolean(KEY_ANDROID_AUTO_LYRICS, value).apply()
+    }
+
     /** How YouTube Music's sound is chosen; see [youtubeQuality]. */
     enum class YouTubeQuality { AUTO, HIGH, LOW }
 
@@ -395,6 +408,7 @@ class PreferencesStore(context: Context) {
         const val KEY_YOUTUBE_QUALITY = "youtube_quality"
         const val KEY_SPICY_LYRICS = "spicy_lyrics_key"
         const val KEY_PREFERRED_LYRICS = "preferred_lyrics_source"
+        const val KEY_ANDROID_AUTO_LYRICS = "android_auto_lyrics"
         const val KEY_KEEP_PLAYING = "keep_playing_on_close"
         const val KEY_SPONSOR_BLOCK = "sponsor_block"
         const val KEY_AUTOPLAY_INFINITE = "autoplay_infinite"

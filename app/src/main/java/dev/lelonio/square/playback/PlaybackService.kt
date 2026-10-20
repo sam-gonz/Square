@@ -148,6 +148,7 @@ class PlaybackService : MediaLibraryService() {
             reason: Int,
         ) {
             redrawButtons()
+            session?.notifyChildrenChanged(MediaBrowseTree.ID_LYRICS, 0, null)
             // A sleep timer set to the end of the track, at the moment the
             // track ends. Not faded: the next one has already started, and
             // fading it in to fade it out would play a second of a song
@@ -362,8 +363,9 @@ class PlaybackService : MediaLibraryService() {
         player = buildPlayer(container.preferences.backend.value)
         startListeningRecorder()
         startWidgetUpdates()
+        startAutoLyrics()
         browseTree = MediaBrowseTree(this, scope, ::ensurePlayerFor, ::resumption)
-        session = MediaLibrarySession.Builder(this, player, browseTree)
+        session = MediaLibrarySession.Builder(this, wrapWithAutoLyrics(player), browseTree)
             // Without this the notification is inert to a tap: Media3 has no way
             // to know which activity owns the session. `SINGLE_TOP` so an app
             // already running comes forward rather than starting a second copy
@@ -1044,7 +1046,7 @@ class PlaybackService : MediaLibraryService() {
             playerKind = kind
             player = buildPlayer(kind)
             player.addListener(buttonsListener)
-            session?.player = player
+            session?.player = wrapWithAutoLyrics(player)
             redrawButtons()
             // The queue on disk belongs to this player when it is the one being
             // restored into — leaving it out is what made a local song paused
@@ -1069,7 +1071,7 @@ class PlaybackService : MediaLibraryService() {
             playerKind = kind
             player = parked
             player.addListener(buttonsListener)
-            session?.player = player
+            session?.player = wrapWithAutoLyrics(player)
             redrawButtons()
             if (restore) restoreQueue()
             observeForSaving()
@@ -1099,7 +1101,7 @@ class PlaybackService : MediaLibraryService() {
 
         player = buildPlayer(kind)
         player.addListener(buttonsListener)
-        session?.player = player
+        session?.player = wrapWithAutoLyrics(player)
         redrawButtons()
         followReverb()
         // The engine is what the Spotify player plays through, so it is started
@@ -1729,6 +1731,106 @@ class PlaybackService : MediaLibraryService() {
         }
     }
 
+    private var autoLyricsPlayer: AutoLyricsForwardingPlayer? = null
+
+    private fun wrapWithAutoLyrics(basePlayer: androidx.media3.common.Player): AutoLyricsForwardingPlayer {
+        val wrapped = AutoLyricsForwardingPlayer(basePlayer) {
+            container.preferences.androidAutoLyrics.value
+        }
+        autoLyricsPlayer = wrapped
+        return wrapped
+    }
+
+    private fun startAutoLyrics() {
+        scope.launch {
+            var currentUri: String? = null
+            var cachedLyrics: dev.lelonio.square.data.Lyrics? = null
+            var timeline: dev.lelonio.square.data.LyricTimeline? = null
+
+            // Observe lyrics upgrades from LyricsLibrary
+            launch {
+                dev.lelonio.square.backend.lyrics.LyricsLibrary.upgrades.collect { (uri, upgraded) ->
+                    if (uri == currentUri) {
+                        cachedLyrics = upgraded
+                        timeline = if (upgraded.synced) dev.lelonio.square.data.LyricTimeline(upgraded) else null
+                    }
+                }
+            }
+
+            // Observe setting toggle changes
+            launch {
+                container.preferences.androidAutoLyrics.collect { enabled ->
+                    session?.notifyChildrenChanged(MediaBrowseTree.ID_ROOT, 3, null)
+                    if (!enabled) {
+                        autoLyricsPlayer?.updateLyric(null)
+                    }
+                }
+            }
+
+            while (true) {
+                val enabled = container.preferences.androidAutoLyrics.value
+                val activePlayer = player
+                val item = activePlayer.currentMediaItem
+                val uri = item?.mediaId
+
+                if (!enabled || item == null || uri == null) {
+                    if (autoLyricsPlayer?.currentCarLyric != null) {
+                        autoLyricsPlayer?.updateLyric(null)
+                    }
+                    currentUri = null
+                    cachedLyrics = null
+                    timeline = null
+                    delay(1000L)
+                    continue
+                }
+
+                if (uri != currentUri) {
+                    currentUri = uri
+                    cachedLyrics = null
+                    timeline = null
+                    autoLyricsPlayer?.updateLyric(null)
+
+                    val meta = item.mediaMetadata
+                    val title = meta.title?.toString().orEmpty()
+                    val artist = meta.extras?.getString(dev.lelonio.square.ui.EXTRA_ORIGINAL_ARTIST)
+                        ?: meta.artist?.toString().orEmpty()
+                    val duration = meta.durationMs ?: activePlayer.duration.coerceAtLeast(0L)
+                    val query = dev.lelonio.square.backend.lyrics.LyricsQuery(uri, title, artist, duration)
+
+                    val lyrics = withContext(Dispatchers.IO) {
+                        dev.lelonio.square.backend.lyrics.LyricsLibrary.lyrics(query)
+                    }
+                    if (currentUri == uri) {
+                        cachedLyrics = lyrics
+                        timeline = if (lyrics != null && lyrics.synced) dev.lelonio.square.data.LyricTimeline(lyrics) else null
+                    }
+                }
+
+                if (!activePlayer.isPlaying) {
+                    delay(500L)
+                    continue
+                }
+
+                val lyrics = cachedLyrics
+                val tl = timeline
+                if (lyrics != null && tl != null && lyrics.synced) {
+                    val pos = activePlayer.currentPosition
+                    val lineIdx = tl.activeLineAt(pos)
+                    val lineText = if (lineIdx in lyrics.lines.indices) {
+                        lyrics.lines[lineIdx].text.trim()
+                    } else null
+                    autoLyricsPlayer?.updateLyric(lineText?.ifBlank { null })
+                } else {
+                    if (autoLyricsPlayer?.currentCarLyric != null) {
+                        autoLyricsPlayer?.updateLyric(null)
+                    }
+                }
+
+                delay(300L)
+            }
+        }
+    }
+
     /** Measures only playback on this device, independently of the activity. */
     private fun startListeningRecorder() {
         val sampler = dev.lelonio.square.data.ListeningSampler()
@@ -2087,6 +2189,7 @@ class PlaybackService : MediaLibraryService() {
             release()
         }
         session = null
+        autoLyricsPlayer = null
         // Only if there is an engine to stop. Reaching for the Spotify backend
         // here would otherwise build its audio sink just to release it.
         if (librespot != null) {

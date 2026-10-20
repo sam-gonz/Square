@@ -36,9 +36,14 @@ import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.withTimeoutOrNull
 import kotlinx.coroutines.guava.future
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
+import dev.lelonio.square.backend.lyrics.LyricsLibrary
+import dev.lelonio.square.backend.lyrics.LyricsQuery
+import dev.lelonio.square.data.LyricTimeline
+import dev.lelonio.square.ui.EXTRA_ORIGINAL_ARTIST
 
 /**
  * The browse tree Android Auto (and any other `MediaBrowser`) reads.
@@ -124,7 +129,7 @@ class MediaBrowseTree(
         sourceRefresh = scope.launch {
             val source = app.activeBackend.id
             val count = try {
-                childrenOf(ID_PLAYLISTS).size
+                childrenOf(session, ID_PLAYLISTS).size
             } catch (error: CancellationException) {
                 throw error
             } catch (error: Exception) {
@@ -461,6 +466,35 @@ class MediaBrowseTree(
                 browsable(ID_PLAYLISTS, strings.getString(R.string.playlists), MediaMetadata.MEDIA_TYPE_FOLDER_PLAYLISTS)
             mediaId == ID_RECENT ->
                 browsable(ID_RECENT, strings.getString(R.string.play_again), MediaMetadata.MEDIA_TYPE_FOLDER_MIXED)
+            mediaId == ID_LYRICS ->
+                browsable(ID_LYRICS, strings.getString(R.string.lyrics_car_title), MediaMetadata.MEDIA_TYPE_FOLDER_MIXED)
+            mediaId.startsWith(LYRIC_LINE_PREFIX) -> {
+                val lineItem = MediaItem.Builder()
+                    .setMediaId(mediaId)
+                    .setMediaMetadata(
+                        MediaMetadata.Builder()
+                            .setTitle(strings.getString(R.string.lyrics))
+                            .setIsBrowsable(false)
+                            .setIsPlayable(true)
+                            .setMediaType(MediaMetadata.MEDIA_TYPE_MUSIC)
+                            .build(),
+                    )
+                    .build()
+                return@future LibraryResult.ofItem(lineItem, null)
+            }
+            mediaId.startsWith("$ID_LYRICS/") -> {
+                val infoItem = MediaItem.Builder()
+                    .setMediaId(mediaId)
+                    .setMediaMetadata(
+                        MediaMetadata.Builder()
+                            .setTitle(strings.getString(R.string.lyrics))
+                            .setIsBrowsable(false)
+                            .setIsPlayable(false)
+                            .build(),
+                    )
+                    .build()
+                return@future LibraryResult.ofItem(infoItem, null)
+            }
             mediaId.startsWith(TRACK_PREFIX) -> {
                 val (parentId, trackUri) = splitTrackId(mediaId) ?: return@future notFound()
                 val track = tracksOf(parentId).firstOrNull { it.uri == trackUri } ?: return@future notFound()
@@ -479,7 +513,7 @@ class MediaBrowseTree(
         pageSize: Int,
         params: LibraryParams?,
     ): ListenableFuture<LibraryResult<ImmutableList<MediaItem>>> = scope.future {
-        val children = runCatching { childrenOf(parentId) }
+        val children = runCatching { childrenOf(session, parentId) }
             .onFailure { android.util.Log.w(TAG, "children of $parentId failed: $it") }
             .getOrElse { emptyList() }
 
@@ -490,11 +524,19 @@ class MediaBrowseTree(
         LibraryResult.ofItemList(ImmutableList.copyOf(children.subList(from, to)), params)
     }
 
-    private suspend fun childrenOf(parentId: String): List<MediaItem> = when {
-        parentId == ID_ROOT -> listOf(
-            browsable(ID_PLAYLISTS, strings.getString(R.string.playlists), MediaMetadata.MEDIA_TYPE_FOLDER_PLAYLISTS),
-            browsable(ID_RECENT, strings.getString(R.string.play_again), MediaMetadata.MEDIA_TYPE_FOLDER_MIXED),
-        )
+    private suspend fun childrenOf(session: MediaLibrarySession, parentId: String): List<MediaItem> = when {
+        parentId == ID_ROOT -> {
+            val list = mutableListOf(
+                browsable(ID_PLAYLISTS, strings.getString(R.string.playlists), MediaMetadata.MEDIA_TYPE_FOLDER_PLAYLISTS),
+                browsable(ID_RECENT, strings.getString(R.string.play_again), MediaMetadata.MEDIA_TYPE_FOLDER_MIXED),
+            )
+            if (app.preferences.androidAutoLyrics.value) {
+                list.add(browsable(ID_LYRICS, strings.getString(R.string.lyrics_car_title), MediaMetadata.MEDIA_TYPE_FOLDER_MIXED))
+            }
+            list
+        }
+
+        parentId == ID_LYRICS -> lyricsOf(session)
 
         parentId == ID_PLAYLISTS -> {
             val backend = app.activeBackend
@@ -520,6 +562,88 @@ class MediaBrowseTree(
             tracksOf(parentId).map { playable(parentId, it) }
 
         else -> emptyList()
+    }
+
+    private suspend fun lyricsOf(session: MediaLibrarySession): List<MediaItem> {
+        val player = session.player
+        val currentItem = player.currentMediaItem
+        if (currentItem == null) {
+            return listOf(
+                MediaItem.Builder()
+                    .setMediaId("$ID_LYRICS/none")
+                    .setMediaMetadata(
+                        MediaMetadata.Builder()
+                            .setTitle(strings.getString(R.string.lyrics_nothing_playing))
+                            .setIsBrowsable(false)
+                            .setIsPlayable(false)
+                            .build(),
+                    )
+                    .build(),
+            )
+        }
+
+        val meta = currentItem.mediaMetadata
+        val uri = currentItem.mediaId
+        val title = meta.title?.toString().orEmpty()
+        val originalArtist = meta.extras?.getString(EXTRA_ORIGINAL_ARTIST)
+            ?: meta.artist?.toString().orEmpty()
+        val durationMs = meta.durationMs ?: player.duration.coerceAtLeast(0L)
+        val query = LyricsQuery(uri, title, originalArtist, durationMs)
+
+        val lyrics = withTimeoutOrNull(4000L) {
+            LyricsLibrary.lyrics(query)
+        }
+        if (lyrics == null || lyrics.lines.isEmpty()) {
+            return listOf(
+                MediaItem.Builder()
+                    .setMediaId("$ID_LYRICS/empty")
+                    .setMediaMetadata(
+                        MediaMetadata.Builder()
+                            .setTitle(strings.getString(R.string.lyrics_not_available))
+                            .setIsBrowsable(false)
+                            .setIsPlayable(false)
+                            .build(),
+                    )
+                    .build(),
+            )
+        }
+
+        val currentPos = player.currentPosition
+        val activeIndex = if (lyrics.synced) LyricTimeline(lyrics).activeLineAt(currentPos) else -1
+
+        return lyrics.lines.mapIndexed { index, line ->
+            val timeMs = line.startTimeMs ?: 0L
+            val formattedTime = formatTime(timeMs)
+            val isCurrent = lyrics.synced && index == activeIndex
+            val prefix = if (isCurrent) "▶ " else ""
+            val displayTitle = prefix + line.text.ifBlank { "♪" }
+            val subtitleText = if (line.translation != null) {
+                "$formattedTime • ${line.translation}"
+            } else {
+                formattedTime
+            }
+
+            MediaItem.Builder()
+                .setMediaId("$LYRIC_LINE_PREFIX$index/$timeMs")
+                .setMediaMetadata(
+                    MediaMetadata.Builder()
+                        .setTitle(displayTitle)
+                        .setSubtitle(subtitleText)
+                        .setArtist(subtitleText)
+                        .setIsBrowsable(false)
+                        .setIsPlayable(line.startTimeMs != null)
+                        .setMediaType(MediaMetadata.MEDIA_TYPE_MUSIC)
+                        .build(),
+                )
+                .build()
+        }
+    }
+
+    private fun formatTime(ms: Long): String {
+        val totalSeconds = (ms / 1000).coerceAtLeast(0)
+        val minutes = totalSeconds / 60
+        val seconds = totalSeconds % 60
+        return "%d:%02d".format(minutes, seconds)
     }
 
     /**
@@ -629,6 +753,17 @@ class MediaBrowseTree(
     ): ListenableFuture<MediaSession.MediaItemsWithStartPosition> = scope.future {
         val firstId = mediaItems.getOrNull(startIndex.coerceAtLeast(0))?.mediaId
             ?: mediaItems.firstOrNull()?.mediaId
+
+        if (firstId != null && firstId.startsWith(LYRIC_LINE_PREFIX)) {
+            val timestampMs = firstId.removePrefix(LYRIC_LINE_PREFIX).substringAfter('/').toLongOrNull()
+                ?: firstId.removePrefix(LYRIC_LINE_PREFIX).toLongOrNull() ?: 0L
+            return@future MediaSession.MediaItemsWithStartPosition(
+                mediaItems,
+                0,
+                timestampMs,
+            )
+        }
+
         ensurePlayerFor(firstId?.let { splitTrackId(it)?.second ?: it })
 
         val single = mediaItems.singleOrNull()
@@ -668,7 +803,10 @@ class MediaBrowseTree(
         controller: MediaSession.ControllerInfo,
         mediaItems: MutableList<MediaItem>,
     ): ListenableFuture<MutableList<MediaItem>> =
-        Futures.immediateFuture(mediaItems.map(::stripBrowseId).toMutableList())
+        Futures.immediateFuture(
+            mediaItems.filterNot { it.mediaId.startsWith(LYRIC_LINE_PREFIX) }
+                .map(::stripBrowseId).toMutableList()
+        )
 
     /** Turns a browse id back into the plain Spotify URI [PlayQueue] insists on. */
     private fun stripBrowseId(item: MediaItem): MediaItem {
@@ -774,7 +912,7 @@ class MediaBrowseTree(
         return NativeBridge.isConnected || app.webApi.isReady
     }
 
-    private companion object {
+    companion object {
         const val TAG = "MediaBrowseTree"
 
         /** The two modes the car cannot reach through the standard transport. */
@@ -786,8 +924,10 @@ class MediaBrowseTree(
         const val ID_ROOT = "sq/root"
         const val ID_PLAYLISTS = "sq/playlists"
         const val ID_RECENT = "sq/recent"
+        const val ID_LYRICS = "sq/lyrics"
         const val TRACK_PREFIX = "sq/t/"
         const val SEARCH_PREFIX = "sq/q/"
+        const val LYRIC_LINE_PREFIX = "sq/lyric/"
 
         const val TRACK_LIMIT = 100
         const val SEARCH_LIMIT = 30

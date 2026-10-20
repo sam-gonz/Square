@@ -59,6 +59,7 @@ import com.adamglin.phosphoricons.regular.ArrowUpRight
 import com.adamglin.phosphoricons.regular.CaretDown
 import com.adamglin.phosphoricons.regular.CaretRight
 import com.adamglin.phosphoricons.regular.CaretUp
+import com.adamglin.phosphoricons.regular.Car
 import com.adamglin.phosphoricons.regular.MicrophoneStage
 import com.adamglin.phosphoricons.regular.Lifebuoy
 import com.adamglin.phosphoricons.regular.ShieldCheck
@@ -573,6 +574,10 @@ fun SettingsScreen(
         // Spicy Lyrics is asked by Spotify track id, so only on that source.
         if (shown == SettingsPage.Playback && showSpotify && "lyrics" in openGroups) groupItem("spicy-lyrics", Group.LYRICS) {
             SpicyLyricsSection()
+        }
+
+        if (shown == SettingsPage.Playback && "lyrics" in openGroups) groupItem("android-auto-lyrics", Group.LYRICS) {
+            AndroidAutoLyricsSection(backdrop)
         }
 
         if (shown == SettingsPage.Playback && "lyrics" in openGroups) groupEnd(Group.LYRICS)
@@ -1772,6 +1777,30 @@ private fun SpicyLyricsSection() {
         ActionRow(stringResource(R.string.spicy_lyrics_get_key), destructive = false, icon = PhosphorIcons.Regular.ArrowUpRight) {
             runCatching { uriHandler.openUri(dev.lelonio.square.backend.lyrics.SpicyLyrics.KEY_PAGE) }
         }
+    }
+}
+
+@Composable
+private fun AndroidAutoLyricsSection(backdrop: Backdrop) {
+    val context = LocalContext.current
+    val store = remember(context) {
+        (context.applicationContext as dev.lelonio.square.SquareApplication).preferences
+    }
+    val enabled by store.androidAutoLyrics.collectAsStateWithLifecycle()
+    Section(stringResource(R.string.android_auto_lyrics_title)) {
+        DownloadSwitch(
+            label = stringResource(R.string.android_auto_lyrics_title),
+            checked = enabled,
+            backdrop = backdrop,
+            icon = PhosphorIcons.Regular.Car,
+            onChange = store::setAndroidAutoLyrics,
+        )
+        Text(
+            stringResource(R.string.android_auto_lyrics_summary),
+            style = MaterialTheme.typography.bodySmall,
+            color = InkDim,
+            modifier = Modifier.padding(start = ROW_TEXT_START, end = 18.dp, bottom = 14.dp),
+        )
     }
 }
 

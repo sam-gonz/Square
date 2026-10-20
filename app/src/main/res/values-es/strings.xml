@@ -614,6 +614,11 @@
     <string name="lyrics_preferred_title">Fuente de letras</string>
     <string name="lyrics_preferred_auto">Automática (la mejor)</string>
     <string name="lyrics_preferred_note">Solo se muestran letras de la fuente elegida: si no tiene la de la canción, no se muestra ninguna. Automática elige la mejor disponible.</string>
+    <string name="android_auto_lyrics_title">Letras en Android Auto</string>
+    <string name="android_auto_lyrics_summary">Muestra letras sincronizadas en vivo en la pantalla del auto y explora estrofas</string>
+    <string name="lyrics_car_title">🎤 Letras</string>
+    <string name="lyrics_nothing_playing">No hay nada reproduciéndose</string>
+    <string name="lyrics_not_available">Sin letra disponible para esta canción</string>
     <string name="youtube_account_fallback_name">Cuenta de Google</string>
     <string name="youtube_sign_in_failed">No se pudo iniciar sesión en YouTube Music. Inténtalo de nuevo; si vuelve a pasar, guarda un informe en Ajustes → Información.</string>
     <string name="spotify_dj_title">DJ de Spotify, con su voz</string>

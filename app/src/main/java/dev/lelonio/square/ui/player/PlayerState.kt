@@ -202,7 +202,8 @@ fun rememberPlaybackState(
                 hasItem = player.currentMediaItem != null,
                 mediaId = player.currentMediaItem?.mediaId,
                 title = metadata.title?.toString().orEmpty(),
-                artist = metadata.artist?.toString().orEmpty(),
+                artist = metadata.extras?.getString(dev.lelonio.square.ui.EXTRA_ORIGINAL_ARTIST)
+                    ?: metadata.artist?.toString().orEmpty(),
                 album = metadata.albumTitle?.toString().orEmpty(),
                 artworkUrl = metadata.artworkUri?.toString(),
                 explicit = metadata.extras
@@ -336,7 +337,8 @@ fun rememberQueue(player: Player?): State<List<QueueEntry>> {
                     index = index,
                     uri = player.getMediaItemAt(index).mediaId,
                     title = metadata.title?.toString().orEmpty(),
-                    artist = metadata.artist?.toString().orEmpty(),
+                    artist = metadata.extras?.getString(dev.lelonio.square.ui.EXTRA_ORIGINAL_ARTIST)
+                        ?: metadata.artist?.toString().orEmpty(),
                     isCurrent = index == current,
                     played = visible.played,
                     recommended = metadata.extras?.getBoolean(dev.lelonio.square.data.SmartShuffle.RECOMMENDED) == true,

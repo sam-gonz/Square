@@ -546,3 +546,6 @@ const val EXTRA_EXPLICIT = "dev.lelonio.square.EXPLICIT"
 /** Every credited artist, in order, as two lists that line up. */
 const val EXTRA_ARTIST_NAMES = "dev.lelonio.square.ARTIST_NAMES"
 const val EXTRA_ARTIST_URIS = "dev.lelonio.square.ARTIST_URIS"
+
+/** The original artist without live karaoke lyrics appended; used by Android Auto. */
+const val EXTRA_ORIGINAL_ARTIST = "dev.lelonio.square.ORIGINAL_ARTIST"
