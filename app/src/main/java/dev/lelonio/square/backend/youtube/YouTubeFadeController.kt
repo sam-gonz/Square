@@ -49,8 +49,6 @@ class YouTubeFadeController(
     private var preparedItem: MediaItem? = null
     private var changing = false
     private var internalChange = false
-    /** Automatic handovers get another alignment attempt while there is room before the end. */
-    private var handoverRetries = 0
     private val djPlanner = dev.lelonio.square.data.DjTransitionPlanner()
     private var pendingUndo: DjSession.Undo? = null
     private var undoExpiry: Job? = null
@@ -110,7 +108,6 @@ class YouTubeFadeController(
 
     override fun onMediaItemTransition(mediaItem: MediaItem?, reason: Int) {
         djPlanner.reset()
-        handoverRetries = 0
         mainSlot.resetEnergy()
         DjSession.publishZone(null)
         if (DjSession.kept.value != mediaItem?.mediaId) DjSession.setKept(null)
@@ -199,10 +196,25 @@ class YouTubeFadeController(
             DjSession.Zone(mediaId, djWindow.startMs, djWindow.endMs)
         } else null)
         // Resolve and buffer the tail ahead of time, without making it audible.
-        if (untilTransition <= 5_000) prepareOutgoing()
+        if (djWindow != null) {
+            val untilStart = djWindow.startMs - position
+            val untilEnd = djWindow.endMs - position
+            if (untilStart in 0..5_000) {
+                prepareOutgoing()
+            } else if (untilEnd in 0..5_000) {
+                val tail = prepareOutgoing()
+                if (tail != null && position - tail.currentPosition > 5_000 && !changing) {
+                    tail.seekTo(position)
+                }
+            }
+        } else if (untilTransition <= 5_000) {
+            prepareOutgoing()
+        }
         val due = if (djWindow == null) untilTransition <= 0
             else position >= djWindow.endMs || (position >= djWindow.startMs && mainSlot.easingOff())
-        if (due && outgoing?.playbackState == Player.STATE_READY) {
+        val canHandover = outgoing?.playbackState == Player.STATE_READY
+        val lateDeadline = djWindow != null && position >= djWindow.endMs + 1_500
+        if (due && (canHandover || lateDeadline)) {
             val undo = if (djWindow != null && mediaId != null && position < duration - fadeMs) {
                 DjSession.Undo(mediaId, player.currentMediaItemIndex, position)
             } else null
@@ -250,14 +262,6 @@ class YouTubeFadeController(
                     }
                 } ?: false
                 if (!handed) {
-                    val remaining = player.duration - player.currentPosition
-                    if (automatic && handoverRetries < MAX_HANDOVER_RETRIES &&
-                        remaining > fadeMs + HANDOVER_RETRY_MARGIN_MS
-                    ) {
-                        handoverRetries++
-                        android.util.Log.w(TAG, "no handover, trying again ($handoverRetries)")
-                        return@launch
-                    }
                     android.util.Log.w(TAG, "no handover, crossing what is buffered instead")
                     retire(tail)
                     val short = fadeMs.coerceAtMost(MAX_BUFFERED_FADE_MS)
@@ -453,7 +457,3 @@ private const val TAIL_LEAD_MS = 300L
 
 /** Longer than the mixer's own timeout, which is the one meant to fire. */
 private const val HANDOVER_WAIT_MS = 4_000L
-
-/** Keep automatic transitions retrying only while enough song remains to do so cleanly. */
-private const val MAX_HANDOVER_RETRIES = 2
-private const val HANDOVER_RETRY_MARGIN_MS = 8_000L
