@@ -98,6 +98,16 @@ rustc --edition=2024 --test native/vendor/librespot-playback/src/auto_dj.rs -o /
 Playback transitions and the car interface need device testing as described
 in [Android Auto](ANDROID_AUTO.md).
 
+To install a personal build beside the author's signed app, use a separate
+application ID and launcher label. This preserves the existing app and its
+data; the personal build has its own sign-in and library settings.
+
+```bash
+./gradlew :app:assembleDev -Psquare.applicationId=dev.samgonz.square '-Psquare.appLabel=Square DJ'
+```
+
+Keep the same signing key when updating that personal build.
+
 ## Signing a release build
 
 The release build is signed with a real key when `keystore.properties` exists

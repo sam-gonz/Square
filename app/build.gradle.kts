@@ -47,7 +47,9 @@ android {
     ndkVersion = ndkVersionForCargo
 
     defaultConfig {
-        applicationId = "dev.lelonio.square"
+        // A personal build can coexist with the author's signed APK.
+        applicationId = providers.gradleProperty("square.applicationId").getOrElse("dev.lelonio.square")
+        manifestPlaceholders["squareAppLabel"] = providers.gradleProperty("square.appLabel").getOrElse("@string/app_name")
         // cpal's Android host is AAudio, which the ndk crate gates at API 26.
         minSdk = 26
         targetSdk = 35
