@@ -66,7 +66,7 @@
 
 ### Lyrics
 
-- Synced lyrics, word by word where they exist and line by line otherwise.
+- Synced lyrics with a highlighted current line and automatic scrolling.
 - Translation into your language, under the original lines.
 
 ### Library and discovery

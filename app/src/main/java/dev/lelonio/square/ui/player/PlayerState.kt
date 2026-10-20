@@ -294,7 +294,20 @@ fun rememberQueue(player: Player?): State<List<QueueEntry>> {
         }
 
         fun rebuild() {
+            val timeline = player.currentTimeline
+            val itemCount = player.mediaItemCount
+            val shuffle = player.shuffleModeEnabled
+            val first = timeline.getFirstWindowIndex(shuffle)
+                .takeIf { it in 0 until itemCount } ?: 0
+            // This follows the player's actual Timeline shuffle order. A
+            // playlist's item indices remain in source order on ExoPlayer,
+            // while navigation follows its ShuffleOrder; iterating indices
+            // directly made the queue panel disagree with playback.
+            val order = timelineQueueOrder(itemCount, first) { index ->
+                timeline.getNextWindowIndex(index, Player.REPEAT_MODE_OFF, shuffle)
+            }
             val current = player.currentMediaItemIndex
+            val currentPosition = order.indexOf(current)
             // The last few heard as well as what comes next.
             //
             // They were left out once because they pushed the upcoming tracks
@@ -302,8 +315,22 @@ fun rememberQueue(player: Player?): State<List<QueueEntry>> {
             // track instead, with these above it for whoever scrolls up. A song
             // that had ended simply vanished from the list, which read as the
             // app throwing it away (#30).
-            val from = (current - QUEUE_HISTORY).coerceAtLeast(0)
-            queue.value = (from until player.mediaItemCount).map { index ->
+            val visibleOrder: List<VisibleQueueIndex>
+            if (currentPosition >= 0 && player.repeatMode == Player.REPEAT_MODE_ALL && order.isNotEmpty()) {
+                // Repeat-all is a cycle. Show at most one copy of every queue
+                // item after the current track, wrapping to the first item.
+                // History may overlap that next cycle, but is separately capped.
+                visibleOrder = repeatAllVisibleOrder(order, current, QUEUE_HISTORY)
+            } else {
+                val from = if (currentPosition >= 0) {
+                    (currentPosition - QUEUE_HISTORY).coerceAtLeast(0)
+                } else 0
+                visibleOrder = order.drop(from).mapIndexed { visibleIndex, index ->
+                    VisibleQueueIndex(index, currentPosition >= 0 && from + visibleIndex < currentPosition)
+                }
+            }
+            queue.value = visibleOrder.map { visible ->
+                val index = visible.index
                 val metadata = player.getMediaItemAt(index).mediaMetadata
                 QueueEntry(
                     index = index,
@@ -311,7 +338,7 @@ fun rememberQueue(player: Player?): State<List<QueueEntry>> {
                     title = metadata.title?.toString().orEmpty(),
                     artist = metadata.artist?.toString().orEmpty(),
                     isCurrent = index == current,
-                    played = index < current,
+                    played = visible.played,
                     recommended = metadata.extras?.getBoolean(dev.lelonio.square.data.SmartShuffle.RECOMMENDED) == true,
                     queued = metadata.extras?.getBoolean(dev.lelonio.square.ui.EXTRA_PLAY_NEXT) == true,
                     contextLabel = metadata.extras?.getString(dev.lelonio.square.ui.EXTRA_CONTEXT_LABEL).orEmpty(),
@@ -324,6 +351,8 @@ fun rememberQueue(player: Player?): State<List<QueueEntry>> {
                 if (events.containsAny(
                         Player.EVENT_TIMELINE_CHANGED,
                         Player.EVENT_MEDIA_ITEM_TRANSITION,
+                        Player.EVENT_SHUFFLE_MODE_ENABLED_CHANGED,
+                        Player.EVENT_REPEAT_MODE_CHANGED,
                     )
                 ) {
                     rebuild()

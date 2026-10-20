@@ -145,6 +145,7 @@ fun LibraryScreen(
     /** The artists the account follows; empty leaves the shelf out entirely. */
     artists: List<dev.lelonio.square.data.SearchItem> = emptyList(),
     onOpenArtist: (dev.lelonio.square.data.SearchItem) -> Unit = {},
+    onArtistMenu: (dev.lelonio.square.data.SearchItem) -> Unit = {},
     /** The albums the account has saved; see MainViewModel.savedAlbums. */
     albums: List<CatalogPlaylist> = emptyList(),
     /** The podcasts the account follows; none leaves their chip out. */
@@ -393,7 +394,7 @@ fun LibraryScreen(
 
                         if (artists.isNotEmpty() && filter == Filter.ALL) {
                             item(span = { GridItemSpan(maxLineSpan) }, key = "artists") {
-                                ArtistShelf(artists, onOpenArtist)
+                                ArtistShelf(artists, onOpenArtist, onArtistMenu)
                             }
                         }
 
@@ -402,11 +403,7 @@ fun LibraryScreen(
                                 playlist,
                                 pinned = playlist.uri in pinned,
                                 onClick = { open(playlist, artists, onOpenPlaylist, onOpenArtist) },
-                                onLongClick = if (canEdit) {
-                                    { onPlaylistMenu(playlist) }
-                                } else {
-                                    null
-                                },
+                                onLongClick = { onPlaylistMenu(playlist) },
                             )
                         }
                     }
@@ -453,7 +450,7 @@ fun LibraryScreen(
                         }
 
                         if (artists.isNotEmpty() && filter == Filter.ALL) {
-                            item(key = "artists") { ArtistShelf(artists, onOpenArtist) }
+                            item(key = "artists") { ArtistShelf(artists, onOpenArtist, onArtistMenu) }
                         }
 
                         items(playlists, key = { "pl_${it.uri}" }) { playlist ->
@@ -461,11 +458,7 @@ fun LibraryScreen(
                                 playlist,
                                 pinned = playlist.uri in pinned,
                                 onClick = { open(playlist, artists, onOpenPlaylist, onOpenArtist) },
-                                onLongClick = if (canEdit) {
-                                    { onPlaylistMenu(playlist) }
-                                } else {
-                                    null
-                                },
+                                onLongClick = { onPlaylistMenu(playlist) },
                             )
                         }
                     }
@@ -825,6 +818,7 @@ private val SelectedFilm = Color.White.copy(alpha = 0.26f)
 private fun ArtistShelf(
     artists: List<dev.lelonio.square.data.SearchItem>,
     onOpen: (dev.lelonio.square.data.SearchItem) -> Unit,
+    onMenu: (dev.lelonio.square.data.SearchItem) -> Unit,
 ) {
     val uniqueArtists = remember(artists) { artists.distinctBy { it.uri } }
     Column(Modifier.padding(bottom = 18.dp)) {
@@ -840,7 +834,7 @@ private fun ArtistShelf(
                 Column(
                     Modifier
                         .width(76.dp)
-                        .pressable({ onOpen(artist) }),
+                        .pressable({ onOpen(artist) }, onLongClick = { onMenu(artist) }),
                     horizontalAlignment = Alignment.CenterHorizontally,
                 ) {
                     Artwork(

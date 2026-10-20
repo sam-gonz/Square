@@ -9,6 +9,7 @@ class DjModeStore(context: Context) {
     private val _settings = MutableStateFlow(
         DjModeSettings(
             enabled = prefs.getBoolean("enabled", false),
+            smart = prefs.getBoolean("smart", true),
             timing = DjTiming.entries.firstOrNull { it.name == prefs.getString("timing", null) }
                 ?: DjTiming.BALANCED,
         ),
@@ -19,8 +20,11 @@ class DjModeStore(context: Context) {
 
     fun setTiming(timing: DjTiming) = save(_settings.value.copy(timing = timing))
 
+    fun setSmart(smart: Boolean) = save(_settings.value.copy(smart = smart))
+
     private fun save(settings: DjModeSettings) {
         _settings.value = settings
-        prefs.edit().putBoolean("enabled", settings.enabled).putString("timing", settings.timing.name).apply()
+        prefs.edit().putBoolean("enabled", settings.enabled).putString("timing", settings.timing.name)
+            .putBoolean("smart", settings.smart).apply()
     }
 }

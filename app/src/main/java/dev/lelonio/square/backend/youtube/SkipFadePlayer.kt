@@ -14,7 +14,19 @@ class SkipFadePlayer(
     private val fadeMs: () -> Int,
 ) : ForwardingPlayer(player) {
 
-    private fun changing(change: () -> Unit) = fades.changeWith(fadeMs(), change)
+    /** Applies the queue panel's desired traversal without changing item indices. */
+    fun setQueueOrder(order: List<Int>) {
+        val exo = wrappedPlayer as? androidx.media3.exoplayer.ExoPlayer ?: return
+        if (order.size != mediaItemCount || order.toSet() != (0 until order.size).toSet()) return
+        exo.setShuffleOrder(
+            androidx.media3.exoplayer.source.ShuffleOrder.DefaultShuffleOrder(
+                order.toIntArray(),
+                System.nanoTime(),
+            ),
+        )
+    }
+
+    private fun changing(change: () -> Unit) = fades.changeWith(fadeMs(), change = change)
 
     override fun release() {
         fades.release()

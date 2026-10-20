@@ -17,6 +17,9 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.drawBehind
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.layout
@@ -45,6 +48,7 @@ fun GlassProgressBar(
     accentColor: Color,
     trackColor: Color,
     modifier: Modifier = Modifier,
+    djZone: ClosedFloatingPointRange<Float>? = null,
 ) {
     var scrubbing by remember { mutableStateOf<Float?>(null) }
     var width by remember { mutableStateOf(1f) }
@@ -103,5 +107,16 @@ fun GlassProgressBar(
                     layout(w, placeable.height) { placeable.place(0, 0) }
                 },
         )
+        if (djZone != null) {
+            Box(Modifier.matchParentSize().drawBehind {
+                val start = djZone.start.coerceIn(0f, 1f) * size.width
+                val end = djZone.endInclusive.coerceIn(djZone.start.coerceIn(0f, 1f), 1f) * size.width
+                val marker = 3.dp.toPx()
+                drawRect(ConnectedInk.copy(alpha = 0.32f),
+                    Offset(start, 11.dp.toPx()), Size((end - start).coerceAtLeast(marker), 6.dp.toPx()))
+                drawRect(ConnectedInk, Offset((start - marker / 2).coerceAtLeast(0f), 7.dp.toPx()),
+                    Size(marker, 14.dp.toPx()))
+            })
+        }
     }
 }

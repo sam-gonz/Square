@@ -33,3 +33,7 @@ keystore.properties
 # named: a capture saved as .txt is still a capture.
 *.har
 *.har.txt
+
+# Generated Graphify index and machine-specific hook configuration
+graphify-out/
+.codex/

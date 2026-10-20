@@ -67,8 +67,8 @@ class QueueActions(
     val onPlay: (Int) -> Unit,
     /** Player indices, in any order. */
     val onRemove: (List<Int>) -> Unit,
-    /** From one player index to another. */
-    val onMove: (Int, Int) -> Unit,
+    /** Move a real player index before another real index; null means the end. */
+    val onMove: (Int, Int?) -> Unit,
     /** Player indices, moved to just after the playing track, in their order. */
     val onPlayNext: (List<Int>) -> Unit,
     /** Puts back what was last taken out, while that is still possible. */
@@ -145,8 +145,6 @@ internal fun QueueList(queue: List<QueueEntry>, actions: QueueActions) {
         upcoming = upcoming.toMutableList().apply { add(toAt, removeAt(fromAt)) }
     }
 
-    // Where the upcoming tracks begin in the player's own order.
-    val firstUpcomingIndex = (current?.index ?: -1) + 1
     val queuedCount = upcoming.count { it.second.queued }
     val contextLabel = upcoming.firstOrNull { !it.second.queued }?.second?.contextLabel
         ?: current?.contextLabel.orEmpty()
@@ -178,9 +176,7 @@ internal fun QueueList(queue: List<QueueEntry>, actions: QueueActions) {
                             action = if (actions.editable && !selecting) stringResource(R.string.queue_clear) else null,
                             onAction = {
                                 actions.onRemove(
-                                    upcoming.mapIndexedNotNull { at, (_, it) ->
-                                        (firstUpcomingIndex + at).takeIf { _ -> it.queued }
-                                    },
+                                    upcoming.mapNotNull { (_, item) -> item.index.takeIf { item.queued } },
                                 )
                             },
                         )
@@ -242,7 +238,10 @@ internal fun QueueList(queue: List<QueueEntry>, actions: QueueActions) {
                                                         dragging = null
                                                         dismissLock.value = false
                                                         if (now >= 0 && now != position) {
-                                                            actions.onMove(entry.index, firstUpcomingIndex + now)
+                                                            actions.onMove(
+                                                                entry.index,
+                                                                upcoming.getOrNull(now + 1)?.second?.index,
+                                                            )
                                                         }
                                                     },
                                                 )
@@ -268,8 +267,8 @@ internal fun QueueList(queue: List<QueueEntry>, actions: QueueActions) {
             exit = slideOutVertically { it } + fadeOut(),
             modifier = Modifier.align(Alignment.BottomCenter),
         ) {
-            val indices = upcoming.mapIndexedNotNull { at, (key, _) ->
-                (firstUpcomingIndex + at).takeIf { key in selected }
+            val indices = upcoming.mapNotNull { (key, entry) ->
+                entry.index.takeIf { key in selected }
             }
             ActionBar(
                 label = pluralStringResource(R.plurals.queue_selected, selected.size, selected.size),

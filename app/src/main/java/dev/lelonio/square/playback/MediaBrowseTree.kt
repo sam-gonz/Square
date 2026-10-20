@@ -242,6 +242,7 @@ class MediaBrowseTree(
             .add(SessionCommand(CMD_REPEAT, Bundle.EMPTY))
             .add(SessionCommand(CMD_RADIO, Bundle.EMPTY))
             .add(SessionCommand(CMD_LIKE, Bundle.EMPTY))
+            .add(SessionCommand(dev.lelonio.square.ui.player.QueueCommands.SET_ORDER, Bundle.EMPTY))
             .build()
 
         return MediaSession.ConnectionResult.AcceptedResultBuilder(session)
@@ -263,6 +264,26 @@ class MediaBrowseTree(
     ): ListenableFuture<SessionResult> {
         val player = session.player
         when (customCommand.customAction) {
+            dev.lelonio.square.ui.player.QueueCommands.SET_ORDER -> {
+                val order = args.getIntArray(dev.lelonio.square.ui.player.QueueCommands.ORDER)?.toList()
+                    ?: return Futures.immediateFuture(SessionResult(SessionResult.RESULT_ERROR_BAD_VALUE))
+                val expected = (0 until player.mediaItemCount).toSet()
+                if (order.size != player.mediaItemCount || order.toSet() != expected) {
+                    return Futures.immediateFuture(SessionResult(SessionResult.RESULT_ERROR_BAD_VALUE))
+                }
+                try {
+                    val skipFade = dev.lelonio.square.ui.player.skipFadeOf(player)
+                    if (player.shuffleModeEnabled && skipFade != null) {
+                        skipFade.setQueueOrder(order)
+                    } else {
+                        dev.lelonio.square.ui.player.applyQueueOrder(player, order)
+                    }
+                } catch (e: Exception) {
+                    android.util.Log.w(TAG, "cannot apply queue order: ${e.message}", e)
+                    return Futures.immediateFuture(SessionResult(SessionResult.RESULT_ERROR_UNKNOWN))
+                }
+                return Futures.immediateFuture(SessionResult(SessionResult.RESULT_SUCCESS))
+            }
             dev.lelonio.square.data.SmartShuffle.COMMAND -> {
                 return scope.future {
                     try {

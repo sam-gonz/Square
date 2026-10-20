@@ -19,10 +19,13 @@ import dev.lelonio.square.download.DownloadExtras
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.encodeToString
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.flow.toList
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.joinAll
 import kotlinx.coroutines.withContext
@@ -42,6 +45,7 @@ import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.Semaphore
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.sync.withPermit
 
@@ -549,6 +553,164 @@ class YouTubeBackend(private val account: YouTubeAccount) : MusicBackend {
             else -> playlistTracks(id, wholePlaylist(id))
         }
     }
+
+    private suspend fun fetchAlbumCatalogTracks(
+        album: AlbumItem,
+        normalizedArtist: String,
+        targetName: String,
+    ): List<CatalogTrack> = runCatching {
+        val albumPage = YouTube.album(album.browseId).getOrThrow()
+        val playlistId = albumPage.album.playlistId.removePrefix("VL")
+            .ifBlank { album.playlistId.removePrefix("VL") }
+        val first = YouTube.playlist(playlistId).getOrThrow()
+        val songs = first.songs.toMutableList()
+        var token = first.songsContinuation ?: first.continuation
+        val seen = mutableSetOf<String>()
+        while (token != null && seen.add(token)) {
+            val page = YouTube.playlistContinuation(token).getOrThrow()
+            if (page.songs.isEmpty() && page.continuation == null) break
+            songs += page.songs
+            token = page.continuation
+        }
+        val albumArtists = albumPage.album.artists.orEmpty()
+        val albumCreditsArtist = albumArtists.singleOrNull()?.let { credited ->
+            credited.id?.let(::publicArtistId) == normalizedArtist ||
+                (credited.id == null && credited.name.equals(targetName, ignoreCase = true))
+        } == true
+        songs.map { song ->
+            if (song.artists.isEmpty() && albumCreditsArtist && albumArtists.isNotEmpty()) {
+                toCatalogTrack(song.copy(artists = albumArtists))
+            } else {
+                toCatalogTrack(song)
+            }
+        }
+    }.getOrDefault(emptyList())
+
+    private fun filterArtistTracks(
+        tracks: List<CatalogTrack>,
+        normalizedArtist: String,
+        targetName: String,
+    ): List<CatalogTrack> = tracks.distinctBy { it.uri }.filter { track ->
+        val credits = track.artists
+        when {
+            credits.any { it.uri != null } -> credits.any {
+                it.uri?.removePrefix(ARTIST_PREFIX)?.let(::publicArtistId) == normalizedArtist
+            }
+            track.artistUri != null -> track.artistUri.removePrefix(ARTIST_PREFIX).let(::publicArtistId) == normalizedArtist
+            else -> track.artist.split(',').any { it.trim().equals(targetName, ignoreCase = true) }
+        }
+    }
+
+    override fun artistShuffleTracks(artistUri: String): Flow<List<CatalogTrack>> = flow {
+        require(artistUri.startsWith(ARTIST_PREFIX)) { "Not a YouTube Music artist URI: $artistUri" }
+        val artistId = publicArtistId(artistUri.removePrefix(ARTIST_PREFIX))
+        val artistPage = withContext(Dispatchers.IO) { YouTube.artist(artistId).getOrThrow() }
+        val targetName = artistPage.artist.title.trim()
+        val normalizedArtist = publicArtistId(artistId)
+
+        artists[normalizedArtist] = ArtistFacts(
+            channelId = artistPage.artist.channelId ?: artistId,
+            subscribed = artistPage.isSubscribed,
+        )
+
+        val topSongs = artistPage.sections
+            .flatMap { it.items }
+            .filterIsInstance<SongItem>()
+            .map(::toCatalogTrack)
+
+        val albumSections = artistPage.sections.filter { section -> section.items.any { it is AlbumItem } }
+        val directAlbums = albumSections
+            .flatMap { section -> section.items.filterIsInstance<AlbumItem>() }
+            .distinctBy { it.browseId }
+
+        val recentAlbums = albumSections
+            .flatMap { section -> section.items.filterIsInstance<AlbumItem>().take(2) }
+            .distinctBy { it.browseId }
+        val recentIds = recentAlbums.map { it.browseId }.toSet()
+        val remainingDirect = directAlbums.filter { it.browseId !in recentIds }
+        val randomDirect = remainingDirect.shuffled().take(2)
+        val initialAlbums = (recentAlbums.take(3) + randomDirect).distinctBy { it.browseId }
+
+        val gate = Semaphore(3)
+        val seenUris = mutableSetOf<String>()
+
+        val initialAlbumTracks = withContext(Dispatchers.IO) {
+            coroutineScope {
+                initialAlbums.map { album ->
+                    async {
+                        gate.withPermit {
+                            fetchAlbumCatalogTracks(album, normalizedArtist, targetName)
+                        }
+                    }
+                }.awaitAll().flatten()
+            }
+        }
+
+        val initialCandidates = topSongs + initialAlbumTracks
+        val initialBatch = filterArtistTracks(initialCandidates, normalizedArtist, targetName)
+            .filter { seenUris.add(it.uri) }
+            .shuffled()
+
+        if (initialBatch.isNotEmpty()) {
+            emit(initialBatch)
+        }
+
+        val processedBrowseIds = initialAlbums.map { it.browseId }.toMutableSet()
+        val remainingAlbums = mutableListOf<AlbumItem>()
+        remainingAlbums.addAll(remainingDirect.filter { processedBrowseIds.add(it.browseId) })
+
+        withContext(Dispatchers.IO) {
+            albumSections.forEach { section ->
+                val endpoint = section.moreEndpoint
+                if (endpoint != null) {
+                    runCatching {
+                        val first = YouTube.artistItems(endpoint).getOrThrow()
+                        first.items.filterIsInstance<AlbumItem>().forEach {
+                            if (processedBrowseIds.add(it.browseId)) remainingAlbums.add(it)
+                        }
+                        var token = first.continuation
+                        val seenTokens = mutableSetOf<String>()
+                        while (token != null && seenTokens.add(token)) {
+                            val next = YouTube.artistItemsContinuation(token).getOrThrow()
+                            next.items.filterIsInstance<AlbumItem>().forEach {
+                                if (processedBrowseIds.add(it.browseId)) remainingAlbums.add(it)
+                            }
+                            token = next.continuation
+                        }
+                    }
+                }
+            }
+        }
+
+        val shuffledRemaining = remainingAlbums.shuffled()
+        for (chunk in shuffledRemaining.chunked(3)) {
+            val chunkTracks = withContext(Dispatchers.IO) {
+                coroutineScope {
+                    chunk.map { album ->
+                        async {
+                            gate.withPermit {
+                                fetchAlbumCatalogTracks(album, normalizedArtist, targetName)
+                            }
+                        }
+                    }.awaitAll().flatten()
+                }
+            }
+            val newTracks = filterArtistTracks(chunkTracks, normalizedArtist, targetName)
+                .filter { seenUris.add(it.uri) }
+                .shuffled()
+
+            if (newTracks.isNotEmpty()) {
+                emit(newTracks)
+            }
+        }
+
+        if (initialBatch.isEmpty() && seenUris.isEmpty()) {
+            emit(emptyList())
+        }
+    }
+
+    override suspend fun discographyTracks(artistUri: String): List<CatalogTrack> =
+        artistShuffleTracks(artistUri).toList().flatten()
 
     /**
      * A playlist's songs, unless they are what [stamp] says they were; and the

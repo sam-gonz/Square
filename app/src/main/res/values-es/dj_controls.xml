@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+<string name="dj_chip">DJ</string>
+<string name="dj_keep_song">Déjala completa</string>
+<string name="dj_kept_song">Completa</string>
+<string name="dj_mode_off">Modo DJ desactivado</string>
+<string name="dj_mode_on">Modo DJ activado</string>
+<string name="dj_smart">Mezcla inteligente</string>
+<string name="dj_smart_note">Dentro del rango, espera a que la canción baje de intensidad (el final de un coro, un puente, un break) y empieza la mezcla ahí. Si nunca baja, mezcla al final del rango. Solo YouTube Music.</string>
+<string name="dj_undo">Deshacer mezcla</string>
+</resources>

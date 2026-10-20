@@ -1,0 +1,5 @@
+<resources>
+    <string name="shuffle_loading">Loading complete list…</string>
+    <string name="shuffle_empty">No playable tracks were found.</string>
+    <string name="shuffle_failed">Could not load the complete list.</string>
+</resources>

@@ -105,10 +105,12 @@ fun CanvasSurface(
     // The view the picture is actually drawn into, kept so it can be read back.
     var texture by remember(url) { mutableStateOf<android.view.TextureView?>(null) }
     val tone = rememberUpdatedState(onTone)
+    val sampling = rememberUpdatedState(isPlaying)
     LaunchedEffect(texture) {
         val view = texture ?: return@LaunchedEffect
         while (true) {
-            if (!view.isAvailable) {
+            // Keep the last colours behind a panel without cancelling an in-flight frame copy.
+            if (!sampling.value || !view.isAvailable) {
                 kotlinx.coroutines.delay(TONE_INTERVAL_MS)
                 continue
             }

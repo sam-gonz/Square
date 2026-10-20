@@ -18,8 +18,9 @@ import androidx.compose.animation.togetherWith
 import androidx.compose.animation.core.Spring
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.spring
-import androidx.compose.animation.core.animateDpAsState
 import androidx.compose.animation.core.tween
+import androidx.compose.foundation.horizontalScroll
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
@@ -471,6 +472,7 @@ fun PlayerScreen(
     connectAvailable: Boolean = true,
     /** Whether the sound is coming out of another of the account's devices. */
     onAnotherDevice: Boolean = false,
+    onArtistLongClick: ((uri: String, name: String) -> Unit)? = null,
 ) {
     var panel by remember { mutableStateOf(PlayerPanel.NONE) }
     // The official SDK mixes its own audio: no effects or karaoke reach it.
@@ -626,11 +628,8 @@ fun PlayerScreen(
         label = "chrome",
     )
 
-    val canvasBlur by animateDpAsState(
-        targetValue = if (panelOpen) 26.dp else 0.dp,
-        animationSpec = tween(320),
-        label = "canvasBlur",
-    )
+    // A fixed background blur avoids rebuilding a full-screen effect on every opening frame.
+    val canvasBlur = if (panelOpen) 26.dp else 0.dp
 
     // And a little darker with it. Blur takes the detail out of what is behind
     // a panel but not the light: on a bright sleeve the words of a lyric sat on
@@ -1408,11 +1407,9 @@ fun PlayerScreen(
                                     query = lyricsQuery,
                                     onChosen = onLyricsChosen,
                                     positionMs = positionMs,
-                                    isPlaying = state.isPlaying,
                                     onSeek = onSeek,
                                     backdrop = panelBackdrop,
                                     expandSignal = karaokeExpand,
-                                    alone = lyricsAlone,
                                 )
 
                                 // Effects and the queue share the lyrics' space
@@ -1544,6 +1541,7 @@ fun PlayerScreen(
                             contentAlignment = Alignment.Center,
                         ) {
                         Row(
+                            modifier = Modifier.horizontalScroll(rememberScrollState()),
                             horizontalArrangement = Arrangement.spacedBy(8.dp),
                             verticalAlignment = Alignment.CenterVertically,
                         ) {
@@ -1621,6 +1619,7 @@ fun PlayerScreen(
                                 }
                             }
                         }
+                        if (!onAnotherDevice) DjControls(state.mediaId, upperBackdrop, !panelOpen && !sideways)
                         }
                         }
 
@@ -1664,6 +1663,7 @@ fun PlayerScreen(
                                         onOpenUri(uri, name)
                                     },
                                     onOpenAlbum = onOpenAlbum,
+                                    onArtistLongClick = onArtistLongClick,
                                 )
                                 // A station built from this track, the way the
                                 // official client's own radio button does it.
@@ -1758,6 +1758,7 @@ fun PlayerScreen(
                                 onSeek = onSeek,
                                 accentColor = GlassInk,
                                 trackColor = GlassInk.copy(alpha = 0.28f),
+                                djZone = rememberDjZone(state, onAnotherDevice),
                             )
                             TimeRow(positionMs, state.durationMs)
 
@@ -1800,6 +1801,7 @@ fun PlayerScreen(
                                     onNext = onNext,
                                     onPrevious = onPrevious,
                                     onCover = { panel = PlayerPanel.LYRICS },
+                                    remote = onAnotherDevice,
                                     modifier = Modifier
                                         .weight(1f)
                                         .fillMaxWidth(),
@@ -2335,6 +2337,7 @@ private fun TitleBlock(
      * only the name — and whoever hands this in is the one that can look it up.
      */
     onOpenAlbum: (() -> Unit)? = null,
+    onArtistLongClick: ((String, String) -> Unit)? = null,
 ) {
     // Slid rather than swapped on a track change: this capsule is the only place
     // the track is named now that the big cover is gone, so the change has to be
@@ -2382,10 +2385,10 @@ private fun TitleBlock(
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     dev.lelonio.square.ui.components.ExplicitMark(color = GlassInk)
                     Spacer(Modifier.width(6.dp))
-                    ArtistLine(state, artist, onOpenArtist)
+                    ArtistLine(state, artist, onOpenArtist, onArtistLongClick)
                 }
             } else {
-                ArtistLine(state, artist, onOpenArtist)
+                ArtistLine(state, artist, onOpenArtist, onArtistLongClick)
             }
         }
     }
@@ -2408,6 +2411,7 @@ private fun ArtistLine(
     state: PlaybackState,
     artist: String,
     onOpenArtist: (uri: String, name: String) -> Unit,
+    onArtistLongClick: ((String, String) -> Unit)?,
 ) {
     val credits = state.artists
     // The names as written, so the spans below line up with what is drawn.
@@ -2426,23 +2430,27 @@ private fun ArtistLine(
         modifier = if (!openable) {
             Modifier
         } else {
-            Modifier.pointerInput(credits, label) {
-                detectTapGestures { position ->
+            Modifier.pointerInput(credits, label, state.artistUri, onOpenArtist, onArtistLongClick) {
+                fun artistAt(position: androidx.compose.ui.geometry.Offset): Pair<String, String>? {
                     val offset = layout?.getOffsetForPosition(position)
                     val hit = offset?.let { at ->
                         var start = 0
                         credits.firstOrNull { credit ->
                             val end = start + credit.name.length
-                            val contains = at in start..end
+                            val contains = at in start until end
                             start = end + 2
                             contains
                         }
                     }
-                    // Anywhere else on the line, and any track that named only
-                    // one artist, goes to the first.
-                    val uri = hit?.uri ?: state.artistUri ?: return@detectTapGestures
-                    onOpenArtist(uri, hit?.name ?: artist)
+                    val uri = hit?.uri ?: state.artistUri ?: return null
+                    return uri to (hit?.name ?: artist)
                 }
+                detectTapGestures(
+                    onLongPress = onArtistLongClick?.let { action ->
+                        { position -> artistAt(position)?.let { (uri, name) -> action(uri, name) }; Unit }
+                    },
+                    onTap = { position -> artistAt(position)?.let { (uri, name) -> onOpenArtist(uri, name) } },
+                )
             }
         },
     )
@@ -2685,7 +2693,7 @@ private fun panelTint(active: Boolean) =
     if (active) MaterialTheme.colorScheme.primary else GlassInk
 
 /** Spotify's own green, which already means "playing over there". */
-private val ConnectedInk = androidx.compose.ui.graphics.Color(0xFF1ED760)
+internal val ConnectedInk = androidx.compose.ui.graphics.Color(0xFF1ED760)
 
 /** The same green for "this one is already in a playlist of yours". */
 private val SavedInk = ConnectedInk
@@ -2799,23 +2807,12 @@ private fun LyricsStage(
     query: dev.lelonio.square.backend.lyrics.LyricsQuery?,
     onChosen: (dev.lelonio.square.data.Lyrics) -> Unit,
     positionMs: State<Long>,
-    isPlaying: Boolean,
     onSeek: (Long) -> Unit,
     backdrop: Backdrop,
     /** Bumped when somebody arrives here asking for the karaoke control. */
     expandSignal: Int,
-    /**
-     * Read alone, with the rest of the player folded away: every line sharp,
-     * so the ones around the sung line can be read as well. The blur is a
-     * depth effect for a lyric glanced at between the controls.
-     */
-    alone: Boolean = false,
 ) {
     val context = androidx.compose.ui.platform.LocalContext.current
-    val preferences = remember(context) {
-        (context.applicationContext as dev.lelonio.square.SquareApplication).preferences
-    }
-    val style by preferences.lyricsStyle.collectAsStateWithLifecycle()
     var optionsOpen by remember(query?.uri) { androidx.compose.runtime.mutableStateOf(false) }
 
     // Off when a song starts: turning it on is asking to read this one.
@@ -2872,8 +2869,6 @@ private fun LyricsStage(
             optionsOpen && query != null -> LyricsOptionsPanel(
                 query = query,
                 current = lyrics?.source,
-                style = style,
-                onStyle = preferences::setLyricsStyle,
                 onChoose = onChosen,
                 onDismiss = { optionsOpen = false },
                 backdrop = backdrop,
@@ -2890,32 +2885,17 @@ private fun LyricsStage(
                 color = GlassInkDim,
             )
 
-            style == dev.lelonio.square.data.PreferencesStore.LyricsStyle.CLASSIC -> ClassicLyricsView(
+            else -> LyricsView(
                 lyrics = shown ?: lyrics,
                 positionMs = positionMs,
                 showTranslation = translated,
                 onSeek = onSeek,
                 modifier = Modifier.fillMaxSize(),
             )
-
-            else -> CompositionLocalProvider(
-                LocalLyricVisualSettings provides LocalLyricVisualSettings.current.let {
-                    if (alone) it.copy(inactiveBlur = 0f) else it
-                },
-            ) {
-                LyricsView(
-                    lyrics = shown ?: lyrics,
-                    positionMs = positionMs,
-                    isPlaying = isPlaying,
-                    showTranslation = translated,
-                    onSeek = onSeek,
-                    modifier = Modifier.fillMaxSize(),
-                )
-            }
         }
 
-        // Where the words came from, and the way to the other sources and
-        // to the other style: low on the left, across from the panel's other
+        // Where the words came from, and the way to the other sources:
+        // low on the left, across from the panel's other
         // controls. Shown with no words as well, since another source may
         // have what the usual order stopped short of.
         // The credit a source asks for, on screen with its words: Spicy Lyrics
@@ -3042,6 +3022,7 @@ private fun SongCard(
     onNext: () -> Unit,
     onPrevious: () -> Unit,
     onCover: () -> Unit,
+    remote: Boolean,
     modifier: Modifier = Modifier,
 ) {
     Column(
@@ -3096,6 +3077,7 @@ private fun SongCard(
                 onSeek = onSeek,
                 accentColor = GlassInk,
                 trackColor = GlassInk.copy(alpha = 0.28f),
+                djZone = rememberDjZone(state, remote),
             )
             TimeRow(positionMs, state.durationMs)
         }

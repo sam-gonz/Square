@@ -5,7 +5,9 @@ import dev.lelonio.square.data.CatalogPlaylist
 import dev.lelonio.square.data.CatalogTrack
 import dev.lelonio.square.data.SearchItem
 import dev.lelonio.square.data.SearchResults
+import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.flow
 
 /** Which backend supplies catalogue and playback. */
 enum class BackendId { SPOTIFY, YOUTUBE_MUSIC }
@@ -169,6 +171,18 @@ interface MusicBackend {
 
     /** Tracks of a playlist, album, or artist URI this backend owns. */
     suspend fun tracksOf(uri: String): List<CatalogTrack>
+
+    /** Every album and single credited to this artist, in release order. */
+    suspend fun discographyTracks(artistUri: String): List<CatalogTrack> = tracksOf(artistUri)
+
+    /**
+     * Streams tracks for an artist shuffle: emits an initial batch quickly
+     * (recent + random sampling) so playback can start immediately, then
+     * progressively emits subsequent batches as remaining releases are loaded.
+     */
+    fun artistShuffleTracks(artistUri: String): Flow<List<CatalogTrack>> = flow {
+        emit(discographyTracks(artistUri))
+    }
 
     /**
      * The words to a track, or null when nobody has them.

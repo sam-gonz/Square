@@ -1635,6 +1635,18 @@ private fun DjModeSection() {
             modifier = Modifier.padding(horizontal = 18.dp, vertical = 14.dp),
         )
         if (settings.enabled) {
+            RowDivider()
+            Row(
+                Modifier.fillMaxWidth()
+                    .toggleable(settings.smart, role = Role.Switch, onValueChange = app.djMode::setSmart)
+                    .padding(horizontal = 18.dp, vertical = 12.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Text(stringResource(R.string.dj_smart), modifier = Modifier.weight(1f))
+                Box(Modifier.clearAndSetSemantics {}) { PlainToggle(settings.smart, app.djMode::setSmart) }
+            }
+            Text(stringResource(R.string.dj_smart_note), style = MaterialTheme.typography.bodySmall,
+                color = InkDim, modifier = Modifier.padding(horizontal = 18.dp, vertical = 12.dp))
             DjTiming.entries.forEach { timing ->
                 RowDivider()
                 val selected = settings.timing == timing

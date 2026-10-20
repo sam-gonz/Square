@@ -206,6 +206,8 @@ fun PlaylistScreen(
      * row tapped keeps whatever shuffle the listener has on.
      */
     onPlayInOrder: (List<CatalogTrack>, Boolean) -> Unit,
+    /** The artist's full discography is being fetched for shuffle. */
+    shuffleLoading: Boolean = false,
     /** Opens the app-wide "add to playlist" sheet for one track. */
     onAddToPlaylist: (CatalogTrack) -> Unit,
     /**
@@ -676,7 +678,11 @@ fun PlaylistScreen(
                 searching = searching,
                 onBack = onBack,
                 onPlay = { visible.takeIf { it.isNotEmpty() }?.let { onPlayInOrder(it, asContext) } },
-                onShuffle = { visible.takeIf { it.isNotEmpty() }?.let(onShuffle) },
+                onShuffle = {
+                    if (isArtist) onShuffle(visible)
+                    else visible.takeIf { it.isNotEmpty() }?.let(onShuffle)
+                },
+                shuffleLoading = shuffleLoading,
                 onToggleSearch = {
                     searching = !searching
                     if (!searching) query = ""
@@ -2024,6 +2030,7 @@ private fun ArtistHeader(
     onBack: () -> Unit,
     onPlay: () -> Unit,
     onShuffle: () -> Unit,
+    shuffleLoading: Boolean,
     onToggleSearch: () -> Unit,
 ) {
     val density = LocalDensity.current
@@ -2116,6 +2123,16 @@ private fun ArtistHeader(
                     backdrop = backdrop,
                     onClick = onToggleInfo,
                     tint = if (infoOpen) ink else ink.copy(alpha = 0.86f),
+                )
+
+                CircleAction(
+                    icon = PhosphorIcons.Bold.Shuffle,
+                    description = stringResource(R.string.shuffle),
+                    size = 46.dp,
+                    backdrop = backdrop,
+                    onClick = onShuffle,
+                    tint = ink,
+                    loading = shuffleLoading,
                 )
 
                 // The one solid control on the page. Round rather than the
@@ -2519,28 +2536,33 @@ private fun CircleAction(
     backdrop: Backdrop,
     onClick: () -> Unit,
     tint: Color = Color.White,
+    loading: Boolean = false,
 ) {
-    LiquidButton(
-        onClick = onClick,
-        backdrop = backdrop,
-        // See GlassCapsule: over the page's flat colour the refraction has
-        // nothing to bend, and only the film and the rim say this is glass.
-        modifier = Modifier
-            .size(size)
-            // A film of its own over the glass. The reference's round controls
-            // read as pale discs against the photograph rather than as holes
-            // cut in it, and refraction alone cannot do that over a picture as
-            // dark as most artist photographs are.
-            .background(Color.White.copy(alpha = 0.17f), CircleShape)
-            .border(0.6.dp, Color.White.copy(alpha = 0.26f), CircleShape),
-        contentHeight = size,
-        contentPadding = 0.dp,
-    ) {
-        Icon(
-            icon,
-            contentDescription = description,
-            tint = tint,
-            modifier = Modifier.size(size * 0.44f),
+    Box(contentAlignment = Alignment.Center) {
+        LiquidButton(
+            onClick = onClick,
+            backdrop = backdrop,
+            // See GlassCapsule: over the page's flat colour the refraction has
+            // nothing to bend, and only the film and the rim say this is glass.
+            modifier = Modifier
+                .size(size)
+                .background(Color.White.copy(alpha = 0.17f), CircleShape)
+                .border(0.6.dp, Color.White.copy(alpha = 0.26f), CircleShape),
+            contentHeight = size,
+            contentPadding = 0.dp,
+        ) {
+            Icon(
+                icon,
+                contentDescription = description,
+                tint = tint,
+                modifier = Modifier.size(size * 0.44f),
+            )
+        }
+        if (loading) CircularProgressIndicator(
+            color = tint,
+            trackColor = Color.White.copy(alpha = 0.22f),
+            strokeWidth = 2.dp,
+            modifier = Modifier.size(size),
         )
     }
 }

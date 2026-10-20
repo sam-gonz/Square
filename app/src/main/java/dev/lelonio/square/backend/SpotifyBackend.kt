@@ -4,6 +4,7 @@ import okhttp3.RequestBody.Companion.toRequestBody
 import androidx.media3.common.Player
 import androidx.media3.common.util.UnstableApi
 import dev.lelonio.square.SquareApplication
+import dev.lelonio.square.data.AlbumDto
 import dev.lelonio.square.data.Catalog
 import dev.lelonio.square.data.CatalogPlaylist
 import dev.lelonio.square.data.CatalogTrack
@@ -14,12 +15,20 @@ import dev.lelonio.square.data.toResults
 import dev.lelonio.square.nativecore.NativeBridge
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitAll
+import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.sync.Semaphore
+import kotlinx.coroutines.sync.withPermit
 import dev.lelonio.square.playback.AudioOutput
 import dev.lelonio.square.playback.LibrespotPlayer
 import dev.lelonio.square.playback.PlayQueue
+import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.flow
+import kotlinx.coroutines.flow.toList
 
 /**
  * The existing Spotify path, behind [MusicBackend].
@@ -205,6 +214,119 @@ class SpotifyBackend(private val container: SquareApplication) : MusicBackend {
 
         else -> Catalog.tracks(Catalog.contextTrackUris(uri))
     }
+
+    override fun artistShuffleTracks(artistUri: String): Flow<List<CatalogTrack>> = flow {
+        require(artistUri.startsWith("spotify:artist:")) { "Not a Spotify artist URI: $artistUri" }
+        check(container.webApi.isReady) { "Spotify Web API setup is required to load an artist's full discography." }
+        val artistId = artistUri.substringAfterLast(':')
+        val targetName = container.api.artist(artistId).name.trim()
+
+        val topTracks = runCatching {
+            container.api.artistTopTracks(artistId, market = container.userCountry).tracks
+                .map { it.toCatalogTrack() }
+        }.getOrDefault(emptyList())
+
+        val firstPage = runCatching {
+            container.api.artistAlbums(
+                artistId,
+                groups = "album,single",
+                limit = 20,
+                market = container.userCountry,
+                offset = 0,
+            )
+        }.getOrNull()
+
+        val allFirstAlbums = firstPage?.items?.filter { it.albumGroup == "album" || it.albumGroup == "single" }
+            ?.distinctBy { it.uri ?: it.id ?: it.name }.orEmpty()
+
+        val recentAlbums = allFirstAlbums.take(2)
+        val remainingFirst = allFirstAlbums.drop(2)
+        val randomFirst = remainingFirst.shuffled().take(2)
+        val initialAlbums = (recentAlbums + randomFirst).distinctBy { it.uri ?: it.id ?: it.name }
+
+        val gate = Semaphore(3)
+        val seenUris = mutableSetOf<String>()
+
+        suspend fun loadAlbumTracks(album: AlbumDto): List<CatalogTrack> = runCatching {
+            val albumUri = album.uri ?: album.id?.let { "spotify:album:$it" } ?: return emptyList()
+            val uris = Catalog.contextTrackUris(albumUri)
+            Catalog.tracks(uris)
+        }.getOrDefault(emptyList())
+
+        fun filterArtist(tracks: List<CatalogTrack>): List<CatalogTrack> =
+            tracks.distinctBy { it.uri }.filter { track ->
+                val credits = track.artists
+                when {
+                    credits.any { it.uri != null } -> credits.any { it.uri == artistUri }
+                    track.artistUri != null -> track.artistUri == artistUri
+                    else -> track.artist.split(',').any { it.trim().equals(targetName, ignoreCase = true) }
+                }
+            }
+
+        val initialAlbumTracks = coroutineScope {
+            initialAlbums.map { album ->
+                async {
+                    gate.withPermit { loadAlbumTracks(album) }
+                }
+            }.awaitAll().flatten()
+        }
+
+        val initialCandidates = topTracks + initialAlbumTracks
+        val initialBatch = filterArtist(initialCandidates)
+            .filter { seenUris.add(it.uri) }
+            .shuffled()
+
+        if (initialBatch.isNotEmpty()) {
+            emit(initialBatch)
+        }
+
+        val remainingAlbums = mutableListOf<AlbumDto>()
+        val initialAlbumKeys = initialAlbums.mapNotNull { it.uri ?: it.id ?: it.name }.toSet()
+        remainingAlbums.addAll(allFirstAlbums.filter { (it.uri ?: it.id ?: it.name) !in initialAlbumKeys })
+
+        var offset = firstPage?.items?.size ?: 0
+        var hasNext = firstPage?.next != null
+        while (hasNext) {
+            val page = runCatching {
+                container.api.artistAlbums(
+                    artistId,
+                    groups = "album,single",
+                    limit = 50,
+                    market = container.userCountry,
+                    offset = offset,
+                )
+            }.getOrNull() ?: break
+            val items = page.items.filter { it.albumGroup == "album" || it.albumGroup == "single" }
+            remainingAlbums.addAll(items.filter { (it.uri ?: it.id ?: it.name) !in initialAlbumKeys })
+            if (page.next == null || page.items.isEmpty()) break
+            offset += page.items.size
+        }
+
+        val distinctRemaining = remainingAlbums.distinctBy { it.uri ?: it.id ?: it.name }.shuffled()
+        for (chunk in distinctRemaining.chunked(3)) {
+            val chunkTracks = coroutineScope {
+                chunk.map { album ->
+                    async {
+                        gate.withPermit { loadAlbumTracks(album) }
+                    }
+                }.awaitAll().flatten()
+            }
+            val newTracks = filterArtist(chunkTracks)
+                .filter { seenUris.add(it.uri) }
+                .shuffled()
+
+            if (newTracks.isNotEmpty()) {
+                emit(newTracks)
+            }
+        }
+
+        if (initialBatch.isEmpty() && seenUris.isEmpty()) {
+            emit(emptyList())
+        }
+    }
+
+    override suspend fun discographyTracks(artistUri: String): List<CatalogTrack> =
+        artistShuffleTracks(artistUri).toList().flatten()
 
     /** Everything the account has saved, newest first, a page at a time. */
     private suspend fun savedTracks(): List<CatalogTrack> {

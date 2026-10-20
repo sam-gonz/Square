@@ -194,6 +194,7 @@ import com.adamglin.phosphoricons.bold.House
 import com.adamglin.phosphoricons.bold.MusicNotes
 import com.adamglin.phosphoricons.bold.SquaresFour
 import com.adamglin.phosphoricons.bold.Broadcast
+import com.adamglin.phosphoricons.bold.Shuffle
 import com.adamglin.phosphoricons.bold.MagnifyingGlass
 import com.adamglin.phosphoricons.fill.SquaresFour
 import com.adamglin.phosphoricons.fill.Broadcast
@@ -549,14 +550,23 @@ fun SquareApp(
                 if (taken.isNotEmpty()) queueUndo = taken.reversed()
             }
         },
-        onMove = { from, to -> player?.moveMediaItem(from, to) },
+        onMove = { from, before ->
+            dev.lelonio.square.ui.player.moveQueueBefore(player, listOf(from), before)
+        },
         onPlayNext = { indices ->
             player?.let { p ->
-                // In their order, each just after the one moved before it.
-                // Every one comes after the playing track, so moving one
-                // leaves the places of those still to move as they were.
-                val after = p.currentMediaItemIndex + 1
-                indices.distinct().sorted().forEachIndexed { k, at -> p.moveMediaItem(at, after + k) }
+                val timeline = p.currentTimeline
+                val selected = indices.toSet()
+                var next = timeline.getNextWindowIndex(
+                    p.currentMediaItemIndex, androidx.media3.common.Player.REPEAT_MODE_OFF, p.shuffleModeEnabled,
+                )
+                val seen = mutableSetOf<Int>()
+                while (next in selected && seen.add(next)) {
+                    next = timeline.getNextWindowIndex(
+                        next, androidx.media3.common.Player.REPEAT_MODE_OFF, p.shuffleModeEnabled,
+                    )
+                }
+                dev.lelonio.square.ui.player.moveQueueBefore(p, indices, next.takeIf { it >= 0 })
             }
         },
         onUndo = queueUndo?.let { taken ->
@@ -773,6 +783,7 @@ fun SquareApp(
     var trackMenu by remember { mutableStateOf<TrackMenuRequest?>(null) }
     // The playlist a long press opened the actions for.
     var playlistMenu by remember { mutableStateOf<CatalogPlaylist?>(null) }
+    var artistMenu by remember { mutableStateOf<CatalogPlaylist?>(null) }
     // What the menu may offer for the playlist it is open on. Defaults say yes,
     // because the library's own rows are the account's own library: only the
     // detail page, which can be a playlist belonging to anyone, ever says no.
@@ -943,6 +954,64 @@ fun SquareApp(
         derivedStateOf { expand.value > 0.999f && !expand.isRunning }
     }
     val scope = rememberCoroutineScope()
+    var fullShuffleUri by remember { mutableStateOf<String?>(null) }
+    var fullShuffleJob by remember { mutableStateOf<kotlinx.coroutines.Job?>(null) }
+    var fullShuffleRequest by remember { mutableStateOf(0) }
+    val shuffleLoadingText = stringResource(R.string.shuffle_loading)
+    val shuffleEmptyText = stringResource(R.string.shuffle_empty)
+    val shuffleFailedText = stringResource(R.string.shuffle_failed)
+    fun startFullShuffle(uri: String, name: String, artist: Boolean) {
+        fullShuffleJob?.cancel()
+        val request = fullShuffleRequest + 1
+        fullShuffleRequest = request
+        fullShuffleUri = uri
+        android.widget.Toast.makeText(context, shuffleLoadingText, android.widget.Toast.LENGTH_SHORT).show()
+        fullShuffleJob = scope.launch {
+            try {
+                if (artist) {
+                    var started = false
+                    viewModel.artistShuffleTracks(uri).collect { batch ->
+                        if (!started) {
+                            if (batch.isEmpty()) {
+                                android.widget.Toast.makeText(context, shuffleEmptyText, android.widget.Toast.LENGTH_LONG).show()
+                            } else {
+                                started = true
+                                if (fullShuffleRequest == request) {
+                                    fullShuffleUri = null
+                                }
+                                player?.shuffleModeEnabled = true
+                                onPlay(batch, batch.indices.random(), null, false, name, 0L)
+                            }
+                        } else if (batch.isNotEmpty()) {
+                            onEnqueueAll(batch)
+                        }
+                    }
+                } else {
+                    val tracks = viewModel.tracksForFullShuffle(uri, artist = false)
+                    if (tracks.isEmpty()) {
+                        android.widget.Toast.makeText(context, shuffleEmptyText, android.widget.Toast.LENGTH_LONG).show()
+                    } else {
+                        player?.shuffleModeEnabled = true
+                        onPlay(tracks, tracks.indices.random(), null, false, name, 0L)
+                    }
+                }
+            } catch (cancelled: kotlinx.coroutines.CancellationException) {
+                throw cancelled
+            } catch (failure: Exception) {
+                android.util.Log.w("SquareShuffle", "full shuffle failed for $uri", failure)
+                android.widget.Toast.makeText(
+                    context,
+                    "$shuffleFailedText ${failure.message.orEmpty()}".trim(),
+                    android.widget.Toast.LENGTH_LONG,
+                ).show()
+            } finally {
+                if (fullShuffleRequest == request) {
+                    fullShuffleUri = null
+                    fullShuffleJob = null
+                }
+            }
+        }
+    }
 
     // Spotify's DJ is played, not opened: as a list it has nothing in it. Its
     // first line takes a few seconds to be synthesised, so the listener is
@@ -1556,7 +1625,7 @@ fun SquareApp(
                 // something is reading it, and a panel over an unrecorded
                 // backdrop has nothing to refract — it came out flat.
                 var updateOpen by remember { mutableStateOf(false) }
-                val sheetsOpen = trackMenu != null || addToPlaylist.open || playlistMenu != null ||
+                val sheetsOpen = trackMenu != null || addToPlaylist.open || playlistMenu != null || artistMenu != null ||
                     sharedTrack != null || friendsOpen || updateOpen
                 // Kept on a little past the close, or the layer would stop
                 // being recorded while the sheet is still fading out over it
@@ -1971,6 +2040,9 @@ fun SquareApp(
                                         navController.navigate(Routes.PLAYLIST) { launchSingleTop = true }
                                     }
                                 },
+                                onArtistMenu = { artist ->
+                                    artistMenu = CatalogPlaylist(artist.uri, artist.title, artist.artworkUrl)
+                                },
                                 backdrop = artBackdrop,
                             )
                         }
@@ -2080,6 +2152,8 @@ fun SquareApp(
                                     onRefreshSuggestions = { page.uri?.let { viewModel.loadSuggestions(it, refresh = true) } },
                                     state = page,
                                     offline = offlineNow,
+                                    shuffleLoading = page.kind == MainViewModel.DetailKind.ARTIST &&
+                                        fullShuffleUri == page.uri,
                                     // Read per row rather than handed over as a
                                     // map: the progress map changes several
                                     // times a second while a playlist is being
@@ -2130,21 +2204,19 @@ fun SquareApp(
                                         onPlay(tracks, 0, page.uri, asContext, source, 0L)
                                     },
                                     onShuffle = { tracks ->
-                                        // Order does not matter: the player
-                                        // treats shuffle as a mode and stamps it
-                                        // onto whatever queue arrives next.
-                                        player?.shuffleModeEnabled = true
-                                        // Shuffled: the order on screen is not
-                                        // the one that will play, so this is a
-                                        // selection rather than the context.
-                                        onPlay(
-                                            tracks,
-                                            if (tracks.isEmpty()) 0 else tracks.indices.random(),
-                                            page.uri,
-                                            false,
-                                            source,
-                                            0L,
-                                        )
+                                        if (page.kind == MainViewModel.DetailKind.ARTIST) {
+                                            page.uri?.let { startFullShuffle(it, page.name, artist = true) }
+                                        } else {
+                                            player?.shuffleModeEnabled = true
+                                            onPlay(
+                                                tracks,
+                                                if (tracks.isEmpty()) 0 else tracks.indices.random(),
+                                                page.uri,
+                                                false,
+                                                source,
+                                                0L,
+                                            )
+                                        }
                                     },
                                     onAddToPlaylist = { track ->
                                         viewModel.openAddToPlaylist(track.uri, track.name)
@@ -3061,6 +3133,9 @@ fun SquareApp(
                             PlayerScreen(
                                 state = playerState,
                                 djSpeaking = djSpeaking,
+                                onArtistLongClick = { uri, name ->
+                                    artistMenu = CatalogPlaylist(uri, name, playback.artworkUrl)
+                                },
                                 // The title is the way onto the record. The
                                 // address travels with the queue where the
                                 // source gave one; where it did not — a list
@@ -3411,6 +3486,30 @@ fun SquareApp(
                     dev.lelonio.square.ui.player.DjStarting()
                 }
 
+                androidx.compose.animation.AnimatedVisibility(
+                    visible = fullShuffleUri != null,
+                    enter = androidx.compose.animation.fadeIn(androidx.compose.animation.core.tween(180)),
+                    exit = androidx.compose.animation.fadeOut(androidx.compose.animation.core.tween(220)),
+                ) {
+                    Row(
+                        Modifier
+                            .align(Alignment.BottomCenter)
+                            .padding(bottom = 112.dp)
+                            .clip(RoundedCornerShape(24.dp))
+                            .background(Color.Black.copy(alpha = 0.78f))
+                            .padding(horizontal = 18.dp, vertical = 14.dp),
+                        horizontalArrangement = Arrangement.spacedBy(12.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        androidx.compose.material3.CircularProgressIndicator(
+                            modifier = Modifier.size(20.dp),
+                            color = Color.White,
+                            strokeWidth = 2.dp,
+                        )
+                        Text(shuffleLoadingText, color = Color.White, style = MaterialTheme.typography.labelLarge)
+                    }
+                }
+
                 }
 
                 // Above the tab bar and the now-playing bar, which is the whole
@@ -3419,6 +3518,25 @@ fun SquareApp(
                 var lastPlaylistMenu by remember { mutableStateOf<CatalogPlaylist?>(null) }
                 LaunchedEffect(playlistMenu) { playlistMenu?.let { lastPlaylistMenu = it } }
                 val shownPlaylist = playlistMenu ?: lastPlaylistMenu
+                var lastArtistMenu by remember { mutableStateOf<CatalogPlaylist?>(null) }
+                LaunchedEffect(artistMenu) { artistMenu?.let { lastArtistMenu = it } }
+                val shownArtist = artistMenu ?: lastArtistMenu
+                TrackSheet(
+                    visible = artistMenu != null,
+                    title = shownArtist?.name.orEmpty(),
+                    subtitle = stringResource(R.string.artist),
+                    artworkUrl = shownArtist?.artworkUrl,
+                    backdrop = overlayBackdrop,
+                    onDismiss = { artistMenu = null },
+                ) {
+                    if (shownArtist != null) TrackSheetAction(
+                        stringResource(R.string.shuffle),
+                        PhosphorIcons.Bold.Shuffle,
+                    ) {
+                        artistMenu = null
+                        startFullShuffle(shownArtist.uri, shownArtist.name, artist = true)
+                    }
+                }
                 TrackSheet(
                     visible = playlistMenu != null,
                     title = shownPlaylist?.name.orEmpty(),
@@ -3428,6 +3546,13 @@ fun SquareApp(
                     onDismiss = { playlistMenu = null },
                 ) {
                     if (shownPlaylist != null) {
+                        TrackSheetAction(stringResource(R.string.shuffle), PhosphorIcons.Bold.Shuffle) {
+                            val uri = shownPlaylist.uri
+                            val artist = uri.startsWith("spotify:artist:") ||
+                                uri.startsWith(dev.lelonio.square.backend.youtube.YouTubeBackend.ARTIST_PREFIX)
+                            playlistMenu = null
+                            startFullShuffle(uri, shownPlaylist.name, artist)
+                        }
                         // First action: this is the one that costs nothing and
                         // can be undone by pressing it again.
                         val isPinned = shownPlaylist.uri in pinnedPlaylists

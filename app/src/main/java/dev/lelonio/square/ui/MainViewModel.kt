@@ -3180,6 +3180,15 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     fun openContext(uri: String, name: String, artworkUrl: String? = null) =
         openPlaylist(CatalogPlaylist(uri = uri, name = name, artworkUrl = artworkUrl))
 
+    /** Resolves a complete artist discography or playlist for a shuffle queue. */
+    suspend fun tracksForFullShuffle(uri: String, artist: Boolean): List<CatalogTrack> =
+        if (artist) container.activeBackend.discographyTracks(uri)
+        else container.activeBackend.tracksOf(uri)
+
+    /** Streams tracks for artist shuffle: initial fast batch followed by progressive batches. */
+    fun artistShuffleTracks(artistUri: String): kotlinx.coroutines.flow.Flow<List<CatalogTrack>> =
+        container.activeBackend.artistShuffleTracks(artistUri)
+
     /**
      * Track lists already resolved, keyed by context URI.
      *

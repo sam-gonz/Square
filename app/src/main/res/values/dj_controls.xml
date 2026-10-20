@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+<string name="dj_chip">DJ</string>
+<string name="dj_keep_song">Play in full</string>
+<string name="dj_kept_song">Playing in full</string>
+<string name="dj_mode_off">DJ mode off</string>
+<string name="dj_mode_on">DJ mode on</string>
+<string name="dj_smart">Smart mix</string>
+<string name="dj_smart_note">Within the range, wait for the song to ease off (the end of a chorus, a bridge, a break) and start the mix there. A song that never does is mixed at the end of the range. YouTube Music only.</string>
+<string name="dj_undo">Undo mix</string>
+</resources>

@@ -127,19 +127,6 @@ class PreferencesStore(context: Context) {
         prefs.edit().putString(KEY_PREFERRED_LYRICS, value).apply()
     }
 
-    /** How the lyrics are drawn: animated word by word, or as plain lines. */
-    enum class LyricsStyle { ANIMATED, CLASSIC }
-
-    private val _lyricsStyle = MutableStateFlow(
-        LyricsStyle.entries.firstOrNull { it.name == prefs.getString(KEY_LYRICS_STYLE, null) } ?: LyricsStyle.ANIMATED,
-    )
-    val lyricsStyle: StateFlow<LyricsStyle> = _lyricsStyle.asStateFlow()
-
-    fun setLyricsStyle(value: LyricsStyle) {
-        _lyricsStyle.value = value
-        prefs.edit().putString(KEY_LYRICS_STYLE, value.name).apply()
-    }
-
     /** How YouTube Music's sound is chosen; see [youtubeQuality]. */
     enum class YouTubeQuality { AUTO, HIGH, LOW }
 
@@ -406,7 +393,6 @@ class PreferencesStore(context: Context) {
         const val KEY_SYSTEM_FONT = "system_font"
         const val KEY_THEME_MODE = "theme_mode"
         const val KEY_YOUTUBE_QUALITY = "youtube_quality"
-        const val KEY_LYRICS_STYLE = "lyrics_style"
         const val KEY_SPICY_LYRICS = "spicy_lyrics_key"
         const val KEY_PREFERRED_LYRICS = "preferred_lyrics_source"
         const val KEY_KEEP_PLAYING = "keep_playing_on_close"

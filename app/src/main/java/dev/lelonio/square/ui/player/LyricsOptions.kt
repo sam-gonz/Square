@@ -8,7 +8,6 @@ import androidx.compose.animation.expandVertically
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.animation.shrinkVertically
-import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -37,7 +36,6 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.rotate
-import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.withLink
@@ -54,13 +52,12 @@ import dev.lelonio.square.backend.lyrics.LyricsLibrary
 import dev.lelonio.square.backend.lyrics.LyricsQuery
 import dev.lelonio.square.backend.lyrics.LyricsSource
 import dev.lelonio.square.data.Lyrics
-import dev.lelonio.square.data.PreferencesStore.LyricsStyle
 import dev.lelonio.square.ui.glass.backdrop.Backdrop
 import dev.lelonio.square.ui.glass.pressable
 import kotlinx.coroutines.launch
 
 /**
- * The way to the other sources and styles: a round button in the column of
+ * The way to the other sources: a round button in the column of
  * the lyrics' controls, above the translation, like them. It used to be a
  * labelled chip on its own in the other corner.
  */
@@ -88,8 +85,7 @@ fun LyricsSourceChip(source: String?, backdrop: Backdrop, onClick: () -> Unit, m
 }
 
 /**
- * Every source asked at once for this song, each saying what it has, and the
- * two ways the words can be drawn.
+ * Every source asked at once for this song, each saying what it has.
  *
  * Asked when opened rather than kept from before: the order stops at the first
  * source with anything, so what the others hold is only known by asking them.
@@ -99,8 +95,6 @@ fun LyricsSourceChip(source: String?, backdrop: Backdrop, onClick: () -> Unit, m
 fun LyricsOptionsPanel(
     query: LyricsQuery,
     current: String?,
-    style: LyricsStyle,
-    onStyle: (LyricsStyle) -> Unit,
     onChoose: (Lyrics) -> Unit,
     onDismiss: () -> Unit,
     backdrop: Backdrop,
@@ -229,35 +223,6 @@ fun LyricsOptionsPanel(
                         exit = fadeOut(tween(160)) + shrinkVertically(tween(160)),
                     ) {
                         Column { others.forEach { row(it) } }
-                    }
-                }
-                Heading(stringResource(R.string.lyrics_style_title), top = 10.dp)
-                // Two side by side, on one line: a choice of two does not need
-                // two rows, and the panel has to fit the lyrics' own space.
-                Row(
-                    Modifier.padding(horizontal = 18.dp),
-                    horizontalArrangement = Arrangement.spacedBy(8.dp),
-                ) {
-                    LyricsStyle.entries.forEach { option ->
-                        val chosen = option == style
-                        Text(
-                            stringResource(
-                                when (option) {
-                                    LyricsStyle.ANIMATED -> R.string.lyrics_style_animated
-                                    LyricsStyle.CLASSIC -> R.string.lyrics_style_classic
-                                },
-                            ),
-                            style = MaterialTheme.typography.bodyMedium,
-                            fontWeight = if (chosen) FontWeight.SemiBold else null,
-                            color = if (chosen) Color.Black else GlassInk,
-                            modifier = Modifier
-                                .weight(1f)
-                                .clip(RoundedCornerShape(50))
-                                .background(if (chosen) GlassInk else GlassInk.copy(alpha = 0.12f))
-                                .pressable({ onStyle(option) }, shape = RoundedCornerShape(50))
-                                .padding(vertical = 9.dp),
-                            textAlign = androidx.compose.ui.text.style.TextAlign.Center,
-                        )
                     }
                 }
             }
