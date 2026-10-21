@@ -450,6 +450,7 @@ class MainActivity : ComponentActivity() {
                     .setTitle(track.name)
                     .setArtist(track.artist)
                     .setAlbumTitle(track.album)
+                    .setReleaseYear(track.year.toIntOrNull())
                     // Left unset when unknown rather than sent as zero: some of
                     // YouTube's shelves carry no length, and a zero here would
                     // win over the one the player works out from the stream.

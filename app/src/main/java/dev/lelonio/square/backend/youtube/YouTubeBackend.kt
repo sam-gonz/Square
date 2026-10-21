@@ -512,7 +512,8 @@ class YouTubeBackend(private val account: YouTubeAccount) : MusicBackend {
             artists = credited,
             album = item.album?.name.orEmpty(),
             albumUri = item.album?.id?.takeIf { it.startsWith("MPRE") }?.let { "$ALBUM_PREFIX$it" },
-            durationMs = item.duration?.takeIf { it > 0 }?.times(1000L) ?: 0L,
+            year = YouTubeShuffleMetadata.knownYear(item.album?.id)?.toString().orEmpty(),
+            durationMs = item.duration?.takeIf { it > 0 }?.times(1000L) ?: YouTubeStreams.durationCache[item.id] ?: 0L,
             explicit = item.explicit,
             artworkUrl = item.thumbnail.atSize(COVER_SIZE),
         )
@@ -531,7 +532,11 @@ class YouTubeBackend(private val account: YouTubeAccount) : MusicBackend {
             uri.startsWith(VIDEOS_PREFIX) -> wholePlaylist(id).map(::toVideoTrack)
 
             // A record opened from the player, by the album's own id.
-            uri.startsWith(ALBUM_PREFIX) -> YouTube.album(id).getOrThrow().songs.map(::toCatalogTrack)
+            uri.startsWith(ALBUM_PREFIX) -> {
+                val page = YouTube.album(id).getOrThrow()
+                YouTubeShuffleMetadata.rememberAlbum(id, page.album.year)
+                page.songs.map { toCatalogTrack(it).copy(year = page.album.year?.toString().orEmpty()) }
+            }
 
             // An artist has no track list of its own, so what "open an artist"
             // means here is the same as everywhere else: their best-known
@@ -560,6 +565,7 @@ class YouTubeBackend(private val account: YouTubeAccount) : MusicBackend {
         targetName: String,
     ): List<CatalogTrack> = runCatching {
         val albumPage = YouTube.album(album.browseId).getOrThrow()
+        YouTubeShuffleMetadata.rememberAlbum(album.browseId, albumPage.album.year ?: album.year)
         val playlistId = albumPage.album.playlistId.removePrefix("VL")
             .ifBlank { album.playlistId.removePrefix("VL") }
         val first = YouTube.playlist(playlistId).getOrThrow()
@@ -582,7 +588,7 @@ class YouTubeBackend(private val account: YouTubeAccount) : MusicBackend {
                 toCatalogTrack(song.copy(artists = albumArtists))
             } else {
                 toCatalogTrack(song)
-            }
+            }.copy(year = (albumPage.album.year ?: album.year)?.toString().orEmpty())
         }
     }.getOrDefault(emptyList())
 
@@ -605,6 +611,7 @@ class YouTubeBackend(private val account: YouTubeAccount) : MusicBackend {
         require(artistUri.startsWith(ARTIST_PREFIX)) { "Not a YouTube Music artist URI: $artistUri" }
         val artistId = publicArtistId(artistUri.removePrefix(ARTIST_PREFIX))
         val artistPage = withContext(Dispatchers.IO) { YouTube.artist(artistId).getOrThrow() }
+        YouTubeShuffleMetadata.rememberArtist(artistId, artistPage)
         val targetName = artistPage.artist.title.trim()
         val normalizedArtist = publicArtistId(artistId)
 
@@ -845,6 +852,7 @@ class YouTubeBackend(private val account: YouTubeAccount) : MusicBackend {
         val page = runCatching { YouTube.artist(id).getOrThrow() }
             .onFailure { android.util.Log.w(TAG, "artist $id", it) }
             .getOrNull() ?: return@withContext null
+        YouTubeShuffleMetadata.rememberArtist(id, page)
         artists[id] = ArtistFacts(channelId = page.artist.channelId ?: id, subscribed = page.isSubscribed)
 
         // The first shelf of songs is the "top songs" list; any later one is

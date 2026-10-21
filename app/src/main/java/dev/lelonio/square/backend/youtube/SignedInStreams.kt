@@ -14,6 +14,8 @@ import okhttp3.RequestBody.Companion.toRequestBody
 import org.json.JSONObject
 import org.schabi.newpipe.extractor.exceptions.AgeRestrictedContentException
 import org.schabi.newpipe.extractor.exceptions.ContentNotAvailableException
+import org.schabi.newpipe.extractor.exceptions.ExtractionException
+import org.schabi.newpipe.extractor.exceptions.ParsingException
 
 /**
  * Streams for the songs YouTube will only play to someone signed in.
@@ -63,7 +65,12 @@ object SignedInStreams {
         generateSequence(error) { it.cause }.any {
             it is AgeRestrictedContentException ||
                 it is org.schabi.newpipe.extractor.exceptions.SignInConfirmNotBotException ||
-                (it is ContentNotAvailableException && it.message.orEmpty().contains("LOGIN_REQUIRED"))
+                it is ContentNotAvailableException ||
+                it is ParsingException ||
+                it is ExtractionException ||
+                it.message.orEmpty().contains("LOGIN_REQUIRED", ignoreCase = true) ||
+                it.message.orEmpty().contains("UNPLAYABLE", ignoreCase = true) ||
+                it.message.orEmpty().contains("not available", ignoreCase = true)
         }
 
     val available: Boolean get() = YouTube.cookie != null
@@ -74,14 +81,17 @@ object SignedInStreams {
      */
     fun forget() = urls.clear()
 
-    /** The URL of [kind] for [videoId], as the signed-in account; blocking. */
+    /** The URL of [kind] for [videoId]; blocking. */
     fun url(context: android.content.Context, videoId: String, kind: Kind, lowRate: Boolean): String {
-        if (!available) throw SignInRequired(videoId)
         val key = "$videoId|$kind|$lowRate"
         val now = android.os.SystemClock.elapsedRealtime()
         urls[key]?.takeIf { now - it.first < URL_TTL_MS }?.let { return it.second }
-        val script = PlayerChallenges.script(context)
-        val response = player(videoId, script.signatureTimestamp)
+        val script = runCatching { PlayerChallenges.script(context) }.getOrNull()
+        val timestamp = script?.signatureTimestamp ?: 0
+        val response = player(videoId, timestamp)
+        response.videoDetails?.lengthSeconds?.toLongOrNull()?.takeIf { it > 0 }?.let {
+            YouTubeStreams.durationCache[videoId] = it * 1000L
+        }
         val issuedAt = android.os.SystemClock.elapsedRealtime()
         val formats = response.streamingData
         val chosen = when (kind) {
@@ -101,7 +111,7 @@ object SignedInStreams {
                 )
                 .firstOrNull()
             Kind.MUXED -> formats?.formats.orEmpty().maxByOrNull { it.height ?: 0 }
-        } ?: error("no ${kind.name.lowercase()} stream for $videoId signed in")
+        } ?: error("no ${kind.name.lowercase()} stream for $videoId")
         val url = try {
             urlOf(context, script, chosen)
         } catch (failure: Exception) {
@@ -114,31 +124,29 @@ object SignedInStreams {
         if (urls.size > 64) urls.entries.minByOrNull { it.value.first }?.let { urls.remove(it.key) }
         android.util.Log.i(
             TAG,
-            "$videoId played signed in through $workingName (${kind.name.lowercase()}, itag ${chosen.itag})",
+            "$videoId played through $workingName (${kind.name.lowercase()}, itag ${chosen.itag})",
         )
         return url
     }
 
     /**
-     * The first signed-in client that will play it. The TV app's comes first,
-     * asked as YouTube's own TV app asks: of www.youtube.com, as a named TV. Its streams need no proof-of-origin token, which the website's
-     * clients do: their addresses answer 403 without one. Asked through
-     * music.youtube.com, or without a make and model, the TV client
-     * answers "the page needs to be reloaded" instead, which is why the
-     * library's own TV client is only a fallback. The rest are tried in turn
-     * after it.
+     * Resolves the stream via the first available client that will play it.
+     * Starts with mobile/TV/embedded clients which supply direct audio without
+     * botguard or PoTokens, falling back through the client list.
      */
     private fun player(videoId: String, timestamp: Int): PlayerResponse {
         val refusals = mutableListOf<String>()
-        val tv = runCatching { tvPlayer(videoId, timestamp) }
-            .onFailure { refusals += "TV: ${it.message}" }
-            .getOrNull()
-        val tvStatus = tv?.playabilityStatus
-        if (tv != null && tvStatus?.status == "OK" && tv.streamingData != null) {
-            workingName = "TVHTML5 (Samsung)"
-            return tv
+        if (YouTube.cookie != null) {
+            val tv = runCatching { tvPlayer(videoId, timestamp) }
+                .onFailure { refusals += "TV: ${it.message}" }
+                .getOrNull()
+            val tvStatus = tv?.playabilityStatus
+            if (tv != null && tvStatus?.status == "OK" && tv.streamingData != null) {
+                workingName = "TVHTML5 (Samsung)"
+                return tv
+            }
+            if (tv != null) refusals += "TV: ${tvStatus?.status} ${tvStatus?.reason.orEmpty()}"
         }
-        if (tv != null) refusals += "TV: ${tvStatus?.status} ${tvStatus?.reason.orEmpty()}"
         for (client in CLIENTS) {
             val response = runBlocking {
                 YouTube.player(videoId, client = client, signatureTimestamp = timestamp)
@@ -151,8 +159,11 @@ object SignedInStreams {
             }
             refusals += "${client.clientName}: ${status?.status} ${status?.reason.orEmpty()}"
         }
-        android.util.Log.w(TAG, "$videoId refused signed in: ${refusals.joinToString(" / ")}")
-        error("signed in, $videoId is unplayable: ${refusals.joinToString(" / ")}")
+        android.util.Log.w(TAG, "$videoId refused: ${refusals.joinToString(" / ")}")
+        if (refusals.any { it.contains("LOGIN_REQUIRED") || it.contains("Sign in") }) {
+            if (!available) throw SignInRequired(videoId)
+        }
+        error("all clients refused $videoId: ${refusals.joinToString(" / ")}")
     }
 
     /**
@@ -266,6 +277,9 @@ object SignedInStreams {
     }
 
     private val CLIENTS = listOf(
+        YouTubeClient.IOS,
+        YouTubeClient.ANDROID_VR_1_65_10,
+        YouTubeClient.TVHTML5_SIMPLY_EMBEDDED_PLAYER,
         YouTubeClient.TVHTML5,
         YouTubeClient.MOBILE,
         // The website's clients: their streams need a proof-of-origin token
@@ -289,7 +303,7 @@ object SignedInStreams {
      */
     private fun urlOf(
         context: android.content.Context,
-        script: PlayerChallenges.Script,
+        script: PlayerChallenges.Script?,
         format: PlayerResponse.StreamingData.Format,
     ): String {
         var url: String
@@ -309,9 +323,13 @@ object SignedInStreams {
             params["sp"]?.let { signatureParameter = it }
         }
         val throttle = android.net.Uri.parse(url).getQueryParameter("n")
+        if (signature == null && throttle == null) {
+            return url
+        }
+        val activeScript = script ?: PlayerChallenges.script(context)
         val (nAnswers, sigAnswers) = PlayerChallenges.solve(
             context,
-            script,
+            activeScript,
             listOfNotNull(throttle),
             listOfNotNull(signature),
         )

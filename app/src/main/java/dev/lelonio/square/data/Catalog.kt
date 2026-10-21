@@ -186,6 +186,33 @@ data class CatalogPlaylist(
     val mine: Boolean? = null,
 )
 
+/** A snapshot of the listener's library kept on disk; see MainViewModel and MediaBrowseTree. */
+@Serializable
+data class LibrarySnapshot(
+    val displayName: String,
+    val playlists: List<CatalogPlaylist>,
+    val avatarUrl: String? = null,
+)
+
+object LibrarySnapshotStore {
+    private const val FILE_NAME = "library-snapshot.json"
+    private val json = kotlinx.serialization.json.Json { ignoreUnknownKeys = true }
+
+    fun file(context: android.content.Context) = java.io.File(context.filesDir, FILE_NAME)
+
+    fun read(context: android.content.Context): List<CatalogPlaylist> = runCatching {
+        json.decodeFromString<LibrarySnapshot>(file(context).readText()).playlists
+    }.getOrElse { emptyList() }
+
+    fun readSnapshot(context: android.content.Context): LibrarySnapshot? = runCatching {
+        json.decodeFromString<LibrarySnapshot>(file(context).readText())
+    }.getOrNull()
+
+    fun write(context: android.content.Context, snapshot: LibrarySnapshot) = runCatching {
+        file(context).writeText(json.encodeToString(LibrarySnapshot.serializer(), snapshot))
+    }
+}
+
 /** One credited artist: what to write, and where it leads. */
 @Serializable
 data class CatalogArtist(val name: String, val uri: String? = null)

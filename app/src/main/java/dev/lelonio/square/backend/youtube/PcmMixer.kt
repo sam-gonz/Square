@@ -428,11 +428,7 @@ class MixerSlot(
     private val follows: MixerSlot? = null,
     initialFade: Float = 1f,
 ) {
-    private val djEnergy = dev.lelonio.square.data.DjEnergyMeter()
-    internal fun resetEnergy() = djEnergy.reset()
-    internal fun easingOff(): Boolean = djEnergy.easingOff
-    internal fun measureEnergy(sumOfSquares: Double, frames: Int) =
-        djEnergy.measure(sumOfSquares, frames, PcmMixer.RATE)
+
     /** The controller's own multiplier, on top of the player's volume. */
     @Volatile var fade = initialFade
 
@@ -578,7 +574,6 @@ class MixerChannel internal constructor(
             return@synchronized
         }
         if (n == 0) return@synchronized
-        var sumOfSquares = 0.0
         for (i in 0 until n) {
             val gain = if (orphaned) {
                 val x = min(1f, (orphanDone + i).toFloat() / orphanTotal)
@@ -588,7 +583,6 @@ class MixerChannel internal constructor(
             }
             val left = ring[readIndex * 2]
             val right = ring[readIndex * 2 + 1]
-            sumOfSquares += (left.toDouble() * left + right.toDouble() * right) * 0.5
             block[i * 2] += left * gain
             block[i * 2 + 1] += right * gain
             history[historyIndex] = (left + right) * 0.5f
@@ -597,7 +591,6 @@ class MixerChannel internal constructor(
             readIndex = (readIndex + 1) % capacity
         }
         queued -= n
-        if (slot.channel === this && !orphaned) slot.measureEnergy(sumOfSquares, n)
         if (orphaned) orphanDone += n
         blocks.addLast(longArrayOf(trackFrame, consumed, n.toLong()))
         consumed += n

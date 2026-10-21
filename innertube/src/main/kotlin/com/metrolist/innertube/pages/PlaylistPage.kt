@@ -43,7 +43,11 @@ data class PlaylistPage(
                         id = it.navigationEndpoint?.browseEndpoint?.browseId ?: return@let null
                     )
                 },
-                duration = renderer.fixedColumns?.firstOrNull()?.musicResponsiveListItemFlexColumnRenderer?.text?.runs?.firstOrNull()?.text?.parseTime(),
+                duration = renderer.fixedColumns?.firstOrNull()?.musicResponsiveListItemFlexColumnRenderer?.text?.runs?.firstOrNull()?.text?.parseTime()
+                    ?: PageHelper.extractDuration(secondaryLineRuns)
+                    ?: renderer.flexColumns.firstNotNullOfOrNull { col ->
+                        PageHelper.extractDuration(col.musicResponsiveListItemFlexColumnRenderer.text?.runs)
+                    },
                 musicVideoType = renderer.musicVideoType,
                 thumbnail = renderer.thumbnail?.getThumbnailUrl() ?: return null,
                 explicit = renderer.badges?.find {

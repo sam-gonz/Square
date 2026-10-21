@@ -30,11 +30,11 @@ data class SavedPlayback(
 )
 
 /**
- * Persists the playing queue so a restart resumes where the user left off.
+ * Persists the queue for explicit media-button resumption and player rebuilds.
+ * Opening the app itself starts with an empty player.
  *
- * Deliberately never records that playback was *running*: an app that starts
- * playing music by itself when opened is worse than one that forgets. The
- * restored session is always paused, ready at the right position.
+ * Never records that playback was running: restoring a saved session prepares
+ * it paused, and only an explicit play request starts it.
  */
 class PlaybackStore(context: Context) {
 

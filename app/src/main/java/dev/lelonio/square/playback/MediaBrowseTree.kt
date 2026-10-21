@@ -24,6 +24,7 @@ import dev.lelonio.square.backend.SearchLabels
 import dev.lelonio.square.backend.youtube.YouTubeBackend
 import dev.lelonio.square.data.Catalog
 import dev.lelonio.square.data.CatalogTrack
+import dev.lelonio.square.data.LibrarySnapshotStore
 import dev.lelonio.square.data.LocalLibrary
 import dev.lelonio.square.nativecore.NativeBridge
 import dev.lelonio.square.ui.EXTRA_CONTEXT_LABEL
@@ -81,7 +82,7 @@ class MediaBrowseTree(
      * button, a headset, the system's media controls after a restart. Null when
      * there is nothing saved either.
      */
-    private val resumption: () -> MediaSession.MediaItemsWithStartPosition? = { null },
+    private val resumption: suspend () -> MediaSession.MediaItemsWithStartPosition? = { null },
 ) : MediaLibrarySession.Callback {
 
     /**
@@ -90,14 +91,15 @@ class MediaBrowseTree(
      * Without an answer here Media3 has nothing to start, and a service it has
      * already brought to the foreground for the button has to show a playing
      * notification within seconds or Android ends the app. The answer is the
-     * session last saved, which is also what the app itself opens on.
+     * session last saved. Opening the app itself leaves its player empty.
      */
     override fun onPlaybackResumption(
         mediaSession: MediaSession,
         controller: MediaSession.ControllerInfo,
     ): ListenableFuture<MediaSession.MediaItemsWithStartPosition> =
-        resumption()?.let { Futures.immediateFuture(it) }
-            ?: Futures.immediateFailedFuture(UnsupportedOperationException("nothing to resume"))
+        scope.future {
+            resumption() ?: throw UnsupportedOperationException("nothing to resume")
+        }
 
     private val app = context.applicationContext as SquareApplication
 
@@ -540,15 +542,32 @@ class MediaBrowseTree(
 
         parentId == ID_PLAYLISTS -> {
             val backend = app.activeBackend
-            if (!catalogueReady(backend.id)) emptyList() else lock.withLock {
-                backend.playlists().map { playlist ->
-                    nodeLabels[playlist.uri] = playlist.name
-                    browsable(
-                        playlist.uri,
-                        playlist.name,
-                        MediaMetadata.MEDIA_TYPE_PLAYLIST,
-                        playlist.artworkUrl?.let(Uri::parse),
-                    )
+            val livePlaylists = runCatching {
+                if (catalogueReady(backend.id)) backend.playlists() else emptyList()
+            }.getOrElse {
+                android.util.Log.w(TAG, "backend.playlists() failed: $it")
+                emptyList()
+            }
+            val playlists = if (livePlaylists.isNotEmpty()) {
+                livePlaylists
+            } else {
+                LibrarySnapshotStore.read(app)
+            }
+            if (playlists.isEmpty()) {
+                listOf(
+                    browsable(ID_RECENT, strings.getString(R.string.play_again), MediaMetadata.MEDIA_TYPE_FOLDER_MIXED),
+                )
+            } else {
+                lock.withLock {
+                    playlists.map { playlist ->
+                        nodeLabels[playlist.uri] = playlist.name
+                        browsable(
+                            playlist.uri,
+                            playlist.name,
+                            MediaMetadata.MEDIA_TYPE_PLAYLIST,
+                            playlist.artworkUrl?.let(Uri::parse),
+                        )
+                    }
                 }
             }
         }
@@ -831,6 +850,8 @@ class MediaBrowseTree(
                                 putBoolean(EXTRA_CONTEXT_ORDERED, false)
                             }
                             nodeLabels[parentId]?.let { putString(EXTRA_CONTEXT_LABEL, it) }
+                            track.artistUri?.let { putString(dev.lelonio.square.ui.EXTRA_ARTIST_URI, it) }
+                            track.albumUri?.let { putString(dev.lelonio.square.ui.EXTRA_ALBUM_URI, it) }
                         },
                     )
                     .build(),
@@ -868,6 +889,7 @@ class MediaBrowseTree(
             .setTitle(track.name)
             .setArtist(track.artist)
             .setAlbumTitle(track.album)
+            .setReleaseYear(track.year.toIntOrNull())
             .setDurationMs(track.durationMs)
             .setArtworkUri(track.artworkUrl?.let(Uri::parse))
             .setIsBrowsable(false)

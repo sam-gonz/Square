@@ -524,15 +524,8 @@ class PlaybackService : MediaLibraryService() {
         // returns at once once the file is open.
         AudioEffects.load(this)
 
-        // What was paused, back on screen before anything is authenticated.
-        //
-        // Connecting is a handshake and a catalogue call, and on a cold start
-        // that is seconds. Waiting for it meant the app came back with an empty
-        // player, as if nothing had ever been playing, and the track appeared
-        // only once the access point answered. The queue is on disk, so it goes
-        // up straight away and shows as loading; the engine is given it in
-        // `connectEngine`.
-        restoreQueue(handOverNow = false)
+        // Opening the app starts with an empty player. A saved session is only
+        // restored after an explicit media-button resumption request.
 
         // The bitrate is fixed when the player is built, so a change means a new
         // engine. Watched here rather than acted on from the settings screen:
@@ -1120,49 +1113,12 @@ class PlaybackService : MediaLibraryService() {
         }
     }
 
-    /**
-     * Starts whatever the active backend needs before it can play.
-     *
-     * For Spotify that is the engine, and the queue is put back once it has
-     * connected — it is the engine that holds it. A backend playing through a
-     * plain player has nothing to wait for, so its queue goes back now.
-     */
+    /** Start the catalogue/engine without loading the previous listening session. */
     private fun startSpotifyEngineIfActive() {
         if (librespot != null) {
-            connectEngine()
+            connectEngine(restoreQueue = false)
         } else {
-            restoreTimeline(container.preferences.backend.value)
             observeForSaving()
-        }
-        restoreLocalQueueIfLast()
-    }
-
-    /**
-     * Puts a queue of the phone's own files back after a restart.
-     *
-     * It cannot be done by starting with the local player, which is what was
-     * tried first: the engine is started by the Spotify player, everything the
-     * catalogue does needs the engine, and coming up without it left the
-     * library on its spinner for ever. So the session starts as it always did
-     * and the local player is swapped in afterwards, with the engine left
-     * running behind it.
-     */
-    private fun restoreLocalQueueIfLast() {
-        val saved = runCatching { playbackStore.load() }.getOrNull() ?: return
-        val first = saved.tracks.firstOrNull()?.uri ?: return
-        if (!dev.lelonio.square.data.LocalLibrary.isLocal(first)) return
-        scope.launch {
-            // Not if something has started in the meantime.
-            //
-            // This is queued at startup and runs whenever the engine has
-            // finished coming up, which can be after the listener has already
-            // opened a playlist and tapped a song. Swapping then put the local
-            // player — holding the file that was paused when the app was last
-            // closed — in front of a session that was playing something else:
-            // the new song came out of the speaker while the screen showed the
-            // old one, paused.
-            if (player.mediaItemCount > 0) return@launch
-            swapPlayer(PlayerKind.LOCAL, restore = true)
         }
     }
 
@@ -1446,7 +1402,7 @@ class PlaybackService : MediaLibraryService() {
      * Authenticates the native session. Runs off the main thread because the
      * access-point handshake is blocking.
      */
-    private fun connectEngine(restoreQueue: Boolean = true) = scope.launch {
+    private fun connectEngine(restoreQueue: Boolean = false) = scope.launch {
         // Guards against the repeated ACTION_CONNECT the UI may send: the native
         // side rejects a second start, and that error would look like a login
         // failure and clear a perfectly good session.
@@ -1686,12 +1642,15 @@ class PlaybackService : MediaLibraryService() {
     /**
      * The queue to resume from a media button; see MediaBrowseTree.onPlaybackResumption.
      *
-     * Whatever the player already holds, which is the saved session put back
-     * when the service started; failing that, the saved session itself.
+     * The current queue, or the saved session after an explicit request to play.
+     * Merely opening the app never invokes this restoration.
      */
-    private fun resumption(): MediaSession.MediaItemsWithStartPosition? {
+    private suspend fun resumption(): MediaSession.MediaItemsWithStartPosition? {
         if (player.mediaItemCount == 0) {
-            runCatching { restoreTimeline(container.preferences.backend.value) }
+            val saved = playbackStore.load() ?: return null
+            ensurePlayerFor(saved.tracks.firstOrNull()?.uri)
+            if (librespot != null) restoreQueue()
+            else restoreTimeline(container.preferences.backend.value)
         }
         val count = player.mediaItemCount
         if (count == 0) return null

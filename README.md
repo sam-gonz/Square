@@ -46,14 +46,23 @@
 ### Player
 
 - The cover or the song's looping canvas video behind the controls.
+- A cold launch opens with an empty player; a media-button resume can explicitly
+  restore the saved listening session.
 - Music videos: switch from the song to its video in place, without losing the
   queue or the position, and keep watching in picture-in-picture.
 - Radio from any song, and autoplay of similar songs when the queue ends.
-- Crossfade between songs, with an option to skip trailing silence.
-- Optional **DJ mode**: blend into the next song at a random point between
-  65% and 85% of the current song. Choose an earlier/later range or a fixed
+- Crossfade between songs, with an option to skip trailing silence. YouTube Music
+  preloads 10 seconds of the next item in the actual playback order.
+- YouTube Music shuffle favors recent releases and the artist’s featured songs,
+  including the first song. Turn off **Prefer recent and popular songs** in
+  **Settings → Playback → Listening** for uniform shuffle.
+- Optional **DJ mode**: analyze the potential mixing segment without AI and
+  choose a musical break between 65% and 85%. Cached synced lyrics help avoid
+  cutting sung words. Without a clear break, use a beat near the deadline or
+  the deadline itself. Choose an earlier/later range or a fixed
   75% point in **Settings → Playback → Listening → DJ mode**. Uses the
-  configured crossfade and follows the queue's shuffle setting. Off by default.
+  configured crossfade and follows the queue's shuffle setting. Its planned
+  transition is shown as a single timeline marker and time. Off by default.
 - Sleep timer: after 5 to 60 minutes or at the end of the song, fading out
   before it stops.
 

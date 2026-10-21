@@ -324,7 +324,7 @@
     <string name="download_with">Download with YTDLnis</string>
     <string name="dj_mode">DJ mode</string>
     <string name="dj_mode_enable">Enable DJ mode</string>
-    <string name="dj_mode_note">Blend into the next song before the current one ends, using your crossfade duration. Follows the queue and shuffle order. Songs under 90 seconds play in full. Repeat one and the end-of-song sleep timer keep the whole song.</string>
+    <string name="dj_mode_note">Find a musical break inside the selected range, using audio and cached synced lyrics. If none is clear, use a beat near the limit or the limit itself. The chosen time stays marked on the timeline. Songs under 90 seconds, repeat one and the end-of-song sleep timer play in full.</string>
     <string name="dj_mode_needs_crossfade">Choose a crossfade duration above to use DJ mode. With crossfade off, songs play in full.</string>
     <string name="dj_timing_balanced" formatted="false">Random: 65–85% of the song</string>
     <string name="dj_timing_early" formatted="false">Random: 50–70% of the song</string>

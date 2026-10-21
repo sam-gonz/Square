@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="discovery_shuffle">Priorizar recientes y populares</string>
+    <string name="discovery_shuffle_note">Da más oportunidades a lanzamientos recientes y canciones destacadas del artista al reproducir en aleatorio. Las antiguas aún pueden sonar. Desactívalo para un aleatorio uniforme.</string>
+    <string name="dj_transition_at">DJ · %1$s</string>
+</resources>

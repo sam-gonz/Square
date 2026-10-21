@@ -6,11 +6,11 @@ import org.junit.Test
 class DjWindowTest {
     private val enabled = DjModeSettings(enabled = true)
 
-    @Test fun smartRangeMatchesPublishedTimelineAndReservesFade() {
+    @Test fun exactPointMatchesPublishedTimelineAndReservesFade() {
         val planner = DjTransitionPlanner()
-        assertEquals(DjWindow(156_000, 204_000), planner.window(240_000, 6_000, 0, enabled))
-        assertEquals(DjWindow(156_000, 204_000), planner.window(240_000, 6_000, 190_000, enabled))
-        assertEquals(DjWindow(58_500, 70_000), DjTransitionPlanner().window(90_000, 20_000, 0, enabled))
+        assertEquals(DjWindow(204_000, 204_000), planner.window(240_000, 6_000, 0, enabled))
+        assertEquals(DjWindow(204_000, 204_000), planner.window(240_000, 6_000, 190_000, enabled))
+        assertEquals(DjWindow(70_000, 70_000), DjTransitionPlanner().window(90_000, 20_000, 0, enabled))
     }
 
     @Test fun lateActivationWaitsUntilSongHasPlayedBeforeRange() {
@@ -21,10 +21,10 @@ class DjWindowTest {
         assertNull(planner.window(240_000, 6_000, 190_000, enabled))
     }
 
-    @Test fun fixedAndNonSmartModesPublishAnExactPoint() {
-        assertEquals(DjWindow(180_000, 180_000), DjTransitionPlanner { 75 }
-            .window(240_000, 6_000, 0, enabled.copy(smart = false)))
-        assertEquals(DjWindow(180_000, 180_000), DjTransitionPlanner { 75 }
+    @Test fun allTimingModesPublishAnExactPoint() {
+        assertEquals(DjWindow(204_000, 204_000), DjTransitionPlanner()
+            .window(240_000, 6_000, 0, enabled))
+        assertEquals(DjWindow(180_000, 180_000), DjTransitionPlanner()
             .window(240_000, 6_000, 0, enabled.copy(timing = DjTiming.THREE_QUARTERS)))
     }
 

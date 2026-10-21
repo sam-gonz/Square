@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="discovery_shuffle">Prefer recent and popular songs</string>
+    <string name="discovery_shuffle_note">Give newer releases and the artist’s featured songs more chances in shuffle. Older songs can still play. Turn off for uniform shuffle.</string>
+    <string name="dj_transition_at">DJ · %1$s</string>
+</resources>

@@ -17,6 +17,14 @@ class PreferencesStore(context: Context) {
     private val prefs = context.applicationContext
         .getSharedPreferences(FILE_NAME, Context.MODE_PRIVATE)
 
+    private val _discoveryShuffle = MutableStateFlow(prefs.getBoolean("discovery_shuffle", true))
+    val discoveryShuffle = _discoveryShuffle.asStateFlow()
+
+    fun setDiscoveryShuffle(value: Boolean) {
+        _discoveryShuffle.value = value
+        prefs.edit().putBoolean("discovery_shuffle", value).apply()
+    }
+
     data class TrackOrder(val sort: String? = null, val descending: Boolean = false)
 
     private val _trackOrders = MutableStateFlow(

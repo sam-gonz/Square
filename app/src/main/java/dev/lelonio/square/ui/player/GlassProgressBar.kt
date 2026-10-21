@@ -110,12 +110,9 @@ fun GlassProgressBar(
         if (djZone != null) {
             Box(Modifier.matchParentSize().drawBehind {
                 val start = djZone.start.coerceIn(0f, 1f) * size.width
-                val end = djZone.endInclusive.coerceIn(djZone.start.coerceIn(0f, 1f), 1f) * size.width
-                val marker = 3.dp.toPx()
-                drawRect(ConnectedInk.copy(alpha = 0.32f),
-                    Offset(start, 11.dp.toPx()), Size((end - start).coerceAtLeast(marker), 6.dp.toPx()))
-                drawRect(ConnectedInk, Offset((start - marker / 2).coerceAtLeast(0f), 7.dp.toPx()),
-                    Size(marker, 14.dp.toPx()))
+                val marker = 2.dp.toPx()
+                drawRect(accentColor, Offset((start - marker / 2).coerceIn(0f, (size.width - marker).coerceAtLeast(0f)), 6.dp.toPx()),
+                    Size(marker, 16.dp.toPx()))
             })
         }
     }

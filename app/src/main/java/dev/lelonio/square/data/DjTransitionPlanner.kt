@@ -1,7 +1,5 @@
 package dev.lelonio.square.data
 
-import kotlin.random.Random
-
 enum class DjTiming(val minPercent: Int, val maxPercent: Int) {
     BALANCED(65, 85),
     EARLY(50, 70),
@@ -12,67 +10,64 @@ enum class DjTiming(val minPercent: Int, val maxPercent: Int) {
 data class DjModeSettings(
     val enabled: Boolean = false,
     val timing: DjTiming = DjTiming.BALANCED,
-    val smart: Boolean = true,
 )
 
 data class DjWindow(val startMs: Long, val endMs: Long)
 
-/** One transition point per play of a song, kept through pauses and seeks. */
-class DjTransitionPlanner(
-    private val choosePercent: (IntRange) -> Int = { Random.nextInt(it.first, it.last + 1) },
-) {
+/** One committed transition per play. Analysis can never move it after publication. */
+class DjTransitionPlanner {
     private var settings: DjModeSettings? = null
-    private var percent: Int? = null
+    private var duration = 0L
+    private var fade = 0
     private var armed = false
-    private var windowArmed = false
+    private var committed: Long? = null
 
     fun reset() {
         settings = null
-        percent = null
+        duration = 0
+        fade = 0
         armed = false
-        windowArmed = false
+        committed = null
     }
 
-    /** The real scheduler's point, or its permitted range when waiting for a musical break. */
-    fun window(durationMs: Long, crossfadeMs: Int, positionMs: Long, settings: DjModeSettings): DjWindow? {
-        if (!settings.smart || settings.timing.minPercent == settings.timing.maxPercent) {
-            return transitionAt(durationMs, crossfadeMs, positionMs, settings)?.let { DjWindow(it, it) }
-        }
-        if (this.settings != settings) {
+    fun range(durationMs: Long, crossfadeMs: Int, positionMs: Long, settings: DjModeSettings): DjWindow? {
+        if (this.settings != settings || duration != durationMs || fade != crossfadeMs) {
             reset()
             this.settings = settings
+            duration = durationMs
+            fade = crossfadeMs
         }
         if (!settings.enabled || durationMs < MIN_TRACK_MS || crossfadeMs <= 0) return null
         val end = minOf(durationMs * settings.timing.maxPercent / 100, durationMs - crossfadeMs)
-        if (end <= 0) return null
         val start = minOf(durationMs * settings.timing.minPercent / 100, end)
-        if (positionMs < start) windowArmed = true
-        return DjWindow(start, end).takeIf { windowArmed }
+        if (end <= 0) return null
+        if (positionMs < start) armed = true
+        return DjWindow(start, end).takeIf { armed }
     }
 
-    fun transitionAt(
-        durationMs: Long,
-        crossfadeMs: Int,
-        positionMs: Long,
-        settings: DjModeSettings,
-    ): Long? {
-        if (this.settings != settings) {
-            reset()
-            this.settings = settings
+    /** Pending work has until before the window starts; after that, commit its deadline. */
+    fun window(
+        durationMs: Long, crossfadeMs: Int, positionMs: Long, settings: DjModeSettings,
+        suggestionMs: Long? = null, analysisPending: Boolean = false,
+    ): DjWindow? {
+        val range = range(durationMs, crossfadeMs, positionMs, settings) ?: return null
+        committed?.let { return DjWindow(it, it) }
+        if (range.startMs == range.endMs) {
+            committed = range.endMs
+        } else if (suggestionMs != null && suggestionMs in range.startMs..range.endMs &&
+            suggestionMs - positionMs >= PREPARE_LEAD_MS) {
+            committed = suggestionMs
+        } else if (!analysisPending || positionMs >= range.startMs - PREPARE_LEAD_MS) {
+            committed = range.endMs
         }
-        // Short songs play in full. An unset/live duration cannot be scheduled.
-        if (!settings.enabled || durationMs < MIN_TRACK_MS || crossfadeMs <= 0) return null
-        val chosen = percent ?: choosePercent(settings.timing.minPercent..settings.timing.maxPercent)
-            .also { percent = it }
-        val target = minOf(durationMs * chosen / 100, durationMs - crossfadeMs)
-        if (target <= 0) return null
-        // Enabling the mode or resuming beyond the chosen point must not skip
-        // a song immediately. It must first have played before that point.
-        if (positionMs < target) armed = true
-        return target.takeIf { armed }
+        return committed?.let { DjWindow(it, it) }
     }
+
+    fun transitionAt(durationMs: Long, crossfadeMs: Int, positionMs: Long, settings: DjModeSettings): Long? =
+        window(durationMs, crossfadeMs, positionMs, settings)?.startMs
 
     companion object {
         const val MIN_TRACK_MS = 90_000L
+        const val PREPARE_LEAD_MS = 8_000L
     }
 }

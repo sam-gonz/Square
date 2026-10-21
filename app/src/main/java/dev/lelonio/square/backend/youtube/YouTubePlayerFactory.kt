@@ -76,6 +76,9 @@ object YouTubePlayerFactory {
             .build()
 
         return buildPlayer(true, mainSlot).let { exo ->
+                // Buffer real media samples for the actual next item, including shuffled navigation.
+                // The player owns/cancels this work when the queue or its order changes.
+                exo.setPreloadConfiguration(ExoPlayer.PreloadConfiguration(10_000_000L))
                 exo.addAnalyticsListener(Diagnostics)
                 // A song YouTube plays only to an account, with none signed in:
                 // said, and passed over, rather than left at --:-- with no word
@@ -118,18 +121,20 @@ object YouTubePlayerFactory {
                             ?.let(YouTubeBackend::videoIdOfUri)
                             ?.takeIf(SongCounterparts::wanted)
                             ?.let { video -> SongCounterparts.known(video)?.let { retitle(exo, video, it) } }
-                        // The next one asked for now, while this one plays.
-                        val next = exo.nextMediaItemIndex
-                        if (next >= 0) {
-                            exo.getMediaItemAt(next).mediaId
-                                .takeIf { it.startsWith(YouTubeBackend.URI_SCHEME) }
-                                ?.let(YouTubeStreams::prefetch)
-                        }
+                    }
+                    override fun onEvents(player: Player, events: Player.Events) {
+                        if (!events.containsAny(Player.EVENT_TIMELINE_CHANGED, Player.EVENT_MEDIA_ITEM_TRANSITION,
+                                Player.EVENT_SHUFFLE_MODE_ENABLED_CHANGED, Player.EVENT_REPEAT_MODE_CHANGED)) return
+                        val next = player.nextMediaItemIndex
+                        if (next >= 0) player.getMediaItemAt(next).mediaId
+                            .takeIf { it.startsWith(YouTubeBackend.URI_SCHEME) }?.let(YouTubeStreams::prefetch)
                     }
                 })
+                val djAnalysis = DjAudioAnalyzer(host.context.applicationContext, dataSources)
                 val fades = YouTubeFadeController(
                     exo, crossfadeStore, mixer, mainSlot, tailSlot,
                     (host.context.applicationContext as? dev.lelonio.square.SquareApplication)?.djMode,
+                    analyze = djAnalysis::analyze,
                 ) {
                     buildPlayer(false, tailSlot)
                 }
@@ -147,7 +152,7 @@ object YouTubePlayerFactory {
                 // Every change of song the listener asks for goes through the
                 // fade; see SkipFadePlayer.
                 mixer.skipFadeMs = { preferences?.skipFadeMs() ?: 0 }
-                SkipFadePlayer(exo, fades) { preferences?.skipFadeMs() ?: 0 }
+                SkipFadePlayer(exo, fades, preferences) { preferences?.skipFadeMs() ?: 0 }
             }
     }
 
@@ -381,10 +386,11 @@ private class YouTubeStreamResolver(
         val base = dataSpec.uri.toString().substringBefore('#')
         val kind = when (dataSpec.uri.fragment) {
             PART_VIDEO -> SignedInStreams.Kind.VIDEO
-            PART_AUDIO -> SignedInStreams.Kind.AUDIO
+            PART_AUDIO, DJ_ANALYSIS_FRAGMENT -> SignedInStreams.Kind.AUDIO
             else -> if (YouTubeVideoMode.wantsVideo(base)) SignedInStreams.Kind.MUXED else SignedInStreams.Kind.AUDIO
         }
         val id = YouTubeBackend.videoIdOfUri(base)
+        android.util.Log.i("SquareYT", "Falling back to stream resolver for $id (${error.javaClass.simpleName}: ${error.message})")
         val url = try {
             SignedInStreams.url(context, id, kind, wantsLowRate())
         } catch (refused: SignedInStreams.SignInRequired) {
@@ -404,6 +410,7 @@ private class YouTubeStreamResolver(
         // "#video" and "#audio" are the two halves of a video played in high
         // quality; see VideoAwareSourceFactory.
         val part = dataSpec.uri.fragment
+        val analysis = part == DJ_ANALYSIS_FRAGMENT
         val base = uri.substringBefore('#')
         val video = part == null && YouTubeVideoMode.wantsVideo(base)
 
@@ -413,8 +420,8 @@ private class YouTubeStreamResolver(
         val kept = dev.lelonio.square.download.YouTubeDownloads.fileFor(context, base)
         // Never for half of a video: the picture is the official video's, and
         // its sound has to be that video's too or the two drift apart.
-        if (kept != null && part == null &&
-            (!video || dev.lelonio.square.playback.OfflineMode.active.value)
+        if (kept != null && (part == null || analysis) &&
+            (!YouTubeVideoMode.wantsVideo(base) || dev.lelonio.square.playback.OfflineMode.active.value)
         ) {
             return dataSpec.withUri(android.net.Uri.fromFile(kept))
         }
@@ -428,7 +435,7 @@ private class YouTubeStreamResolver(
         val songId = YouTubeBackend.videoIdOfUri(base)
         // A song watched rather than heard is its official video, sound and
         // all; see YouTubeStreams.watchSource. A video is already itself.
-        val watching = part != null || video
+        val watching = (part != null && !analysis) || video || (analysis && YouTubeVideoMode.wantsVideo(base))
         val (videoId, info) = if (watching && base.startsWith(YouTubeBackend.TRACK_PREFIX)) {
             YouTubeStreams.watchSource(songId)
         } else {
@@ -545,6 +552,8 @@ private const val MAX_VIDEO_HEIGHT = 1080
 object YouTubeStreams {
     const val WATCH_URL = "https://www.youtube.com/watch?v="
 
+    val durationCache = java.util.concurrent.ConcurrentHashMap<String, Long>()
+
     private val infos = java.util.concurrent.ConcurrentHashMap<String, Pair<Long, StreamInfo>>()
     private val watched = java.util.concurrent.ConcurrentHashMap<String, Pair<Long, Pair<String, StreamInfo>>>()
     private val locks = java.util.concurrent.ConcurrentHashMap<String, Any>()
@@ -562,6 +571,7 @@ object YouTubeStreams {
         infos[videoId]?.takeIf { now - it.first < INFO_TTL_MS }?.let { return it.second }
         ensureNewPipe()
         val fresh = StreamInfo.getInfo(ServiceList.YouTube, "$WATCH_URL$videoId")
+        if (fresh.duration > 0) durationCache[videoId] = fresh.duration * 1000L
         infos[videoId] = now to fresh
         if (infos.size > 64) infos.entries.minByOrNull { it.value.first }?.let { infos.remove(it.key) }
         fresh

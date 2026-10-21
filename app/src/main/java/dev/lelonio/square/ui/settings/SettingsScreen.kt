@@ -532,6 +532,10 @@ fun SettingsScreen(
             DjModeSection()
         }
 
+        if (shown == SettingsPage.Playback && "listening" in openGroups && spotifyActive == BackendId.YOUTUBE_MUSIC) groupItem("discovery-shuffle", Group.LISTENING) {
+            DiscoveryShuffleSection(backdrop)
+        }
+
         // Autoplay: automatically append similar tracks when queue reaches the end.
         if (shown == SettingsPage.Playback && "listening" in openGroups) groupItem("autoplay", Group.LISTENING) {
             AutoplaySection(backdrop)
@@ -1612,6 +1616,21 @@ private fun CrossfadeSection(backdrop: Backdrop) {
 }
 
 @Composable
+private fun DiscoveryShuffleSection(backdrop: Backdrop) {
+    val context = LocalContext.current
+    val preferences = remember(context) {
+        (context.applicationContext as dev.lelonio.square.SquareApplication).preferences
+    }
+    val enabled by preferences.discoveryShuffle.collectAsStateWithLifecycle()
+    Section(stringResource(R.string.discovery_shuffle)) {
+        DownloadSwitch(stringResource(R.string.discovery_shuffle), enabled, backdrop,
+            PhosphorIcons.Regular.Waveform, preferences::setDiscoveryShuffle)
+        Text(stringResource(R.string.discovery_shuffle_note), style = MaterialTheme.typography.bodySmall,
+            color = InkDim, modifier = Modifier.padding(horizontal = 18.dp, vertical = 12.dp))
+    }
+}
+
+@Composable
 private fun DjModeSection() {
     val context = LocalContext.current
     val app = remember(context) { context.applicationContext as dev.lelonio.square.SquareApplication }
@@ -1640,18 +1659,6 @@ private fun DjModeSection() {
             modifier = Modifier.padding(horizontal = 18.dp, vertical = 14.dp),
         )
         if (settings.enabled) {
-            RowDivider()
-            Row(
-                Modifier.fillMaxWidth()
-                    .toggleable(settings.smart, role = Role.Switch, onValueChange = app.djMode::setSmart)
-                    .padding(horizontal = 18.dp, vertical = 12.dp),
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                Text(stringResource(R.string.dj_smart), modifier = Modifier.weight(1f))
-                Box(Modifier.clearAndSetSemantics {}) { PlainToggle(settings.smart, app.djMode::setSmart) }
-            }
-            Text(stringResource(R.string.dj_smart_note), style = MaterialTheme.typography.bodySmall,
-                color = InkDim, modifier = Modifier.padding(horizontal = 18.dp, vertical = 12.dp))
             DjTiming.entries.forEach { timing ->
                 RowDivider()
                 val selected = settings.timing == timing

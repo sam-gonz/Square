@@ -303,7 +303,7 @@
     <string name="download_with">Descargar con YTDLnis</string>
     <string name="dj_mode">Modo DJ</string>
     <string name="dj_mode_enable">Activar modo DJ</string>
-    <string name="dj_mode_note">Mezcla la siguiente canción antes de que termine la actual, con la duración del fundido configurada. Respeta la cola y el orden aleatorio. Las canciones de menos de 90 segundos se escuchan completas. Repetir una canción y el temporizador al final de la canción conservan la canción completa.</string>
+    <string name="dj_mode_note">Busca una pausa musical dentro del rango elegido, usando el audio y las letras sincronizadas guardadas. Si no hay una pausa clara, usa un pulso cerca del límite o el propio límite. La hora elegida queda marcada en la barra. Las canciones de menos de 90 segundos, repetir una y el temporizador al final conservan la canción completa.</string>
     <string name="dj_mode_needs_crossfade">Elige arriba una duración del fundido para usar el modo DJ. Con el fundido apagado, las canciones se escuchan completas.</string>
     <string name="dj_timing_balanced" formatted="false">Aleatorio: entre el 65 y el 85% de la canción</string>
     <string name="dj_timing_early" formatted="false">Aleatorio: entre el 50 y el 70% de la canción</string>

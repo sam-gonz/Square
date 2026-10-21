@@ -40,6 +40,7 @@ class YouTubeFadeController(
     private val mainSlot: MixerSlot,
     private val tailSlot: MixerSlot,
     private val djModeStore: dev.lelonio.square.data.DjModeStore? = null,
+    private val analyze: (suspend (MediaItem, dev.lelonio.square.data.DjWindow) -> Long?)? = null,
     private val createOutgoing: () -> ExoPlayer,
 ) : Player.Listener {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
@@ -50,6 +51,11 @@ class YouTubeFadeController(
     private var changing = false
     private var internalChange = false
     private val djPlanner = dev.lelonio.square.data.DjTransitionPlanner()
+    private var analysisJob: Job? = null
+    private var analysisKey: String? = null
+    private var analysisGeneration = 0
+    private var analysisPoint: Long? = null
+    private var analysisDone = false
     private var pendingUndo: DjSession.Undo? = null
     private var undoExpiry: Job? = null
     private val undoHandler: (DjSession.Undo) -> Unit = { undo ->
@@ -108,7 +114,7 @@ class YouTubeFadeController(
 
     override fun onMediaItemTransition(mediaItem: MediaItem?, reason: Int) {
         djPlanner.reset()
-        mainSlot.resetEnergy()
+        cancelAnalysis()
         DjSession.publishZone(null)
         if (DjSession.kept.value != mediaItem?.mediaId) DjSession.setKept(null)
         undoExpiry?.cancel()
@@ -156,17 +162,55 @@ class YouTubeFadeController(
         return tail
     }
 
+    private fun cancelAnalysis() {
+        analysisGeneration++
+        analysisJob?.cancel()
+        analysisJob = null
+        analysisKey = null
+        analysisPoint = null
+        analysisDone = false
+    }
+
+    private fun requestAnalysis(range: dev.lelonio.square.data.DjWindow) {
+        val item = player.currentMediaItem ?: return
+        val key = "${item.mediaId}:${range.startMs}:${range.endMs}"
+        if (key == analysisKey) return
+        cancelAnalysis()
+        analysisKey = key
+        val generation = analysisGeneration
+        if (analyze == null || range.startMs == range.endMs) {
+            analysisDone = true
+            return
+        }
+        analysisJob = scope.launch {
+            try {
+                analysisPoint = withTimeoutOrNull(16_000) { analyze.invoke(item, range) }
+                if (analysisPoint == null) android.util.Log.i(TAG, "DJ analysis unavailable; deadline ${range.endMs}ms")
+            } catch (cancelled: kotlinx.coroutines.CancellationException) {
+                throw cancelled
+            } catch (error: Exception) {
+                android.util.Log.w(TAG, "DJ analysis unavailable; using deadline", error)
+            } finally {
+                if (generation == analysisGeneration) analysisDone = true
+            }
+        }
+    }
+
     private fun checkEnd() {
         if (changing || !player.isPlaying) return
         // No crossfade while a sleep timer waits for the end of this song: the
         // fade moved to the next song seconds early, the timer took that for
         // a skip, and the music never paused. The song now plays to its end.
         if (dev.lelonio.square.playback.SleepTimer.atTrackEnd.value) {
+            if (analysisKey != null) cancelAnalysis()
+            djPlanner.reset()
             DjSession.publishZone(null)
             return
         }
         val fadeMs = crossfadeStore?.durationMs() ?: 0
         if (fadeMs <= 0) {
+            if (analysisKey != null) cancelAnalysis()
+            djPlanner.reset()
             DjSession.publishZone(null)
             if (preparedItem != null) cancelOverlap()
             return
@@ -179,53 +223,59 @@ class YouTubeFadeController(
         }
         val mediaId = player.currentMediaItem?.mediaId
         val kept = mediaId != null && DjSession.kept.value == mediaId
-        val djWindow = if (player.repeatMode != Player.REPEAT_MODE_ONE && !kept) {
-            djPlanner.window(
-                duration, fadeMs, position,
-                djModeStore?.settings?.value ?: dev.lelonio.square.data.DjModeSettings(),
-            )
-        } else null
-        val untilTransition = (djWindow?.startMs ?: (duration - fadeMs)) - position
         val next = if (player.repeatMode == Player.REPEAT_MODE_ONE) player.currentMediaItemIndex
             else player.nextMediaItemIndex
         if (next < 0) {
+            cancelAnalysis()
             DjSession.publishZone(null)
             return
         }
+        val settings = djModeStore?.settings?.value ?: dev.lelonio.square.data.DjModeSettings()
+        val range = if (player.repeatMode != Player.REPEAT_MODE_ONE && !kept) {
+            djPlanner.range(duration, fadeMs, position, settings)
+        } else null
+        val djWindow = if (range != null) {
+            requestAnalysis(range)
+            djPlanner.window(duration, fadeMs, position, settings, analysisPoint, analysisPending = !analysisDone)
+        } else {
+            if (analysisKey != null) cancelAnalysis()
+            djPlanner.reset()
+            null
+        }
+        if (djWindow != null && !analysisDone) {
+            // Once its displayed point is committed, late analysis cannot move it.
+            analysisJob?.cancel()
+            analysisDone = true
+        }
+        val untilTransition = (djWindow?.startMs ?: (duration - fadeMs)) - position
         DjSession.publishZone(if (djWindow != null && mediaId != null) {
             DjSession.Zone(mediaId, djWindow.startMs, djWindow.endMs)
         } else null)
-        // Resolve and buffer the tail ahead of time, without making it audible.
-        if (djWindow != null) {
-            val untilStart = djWindow.startMs - position
-            val untilEnd = djWindow.endMs - position
-            if (untilStart in 0..5_000) {
-                prepareOutgoing()
-            } else if (untilEnd in 0..5_000) {
-                val tail = prepareOutgoing()
-                if (tail != null && position - tail.currentPosition > 5_000 && !changing) {
-                    tail.seekTo(position)
-                }
-            }
-        } else if (untilTransition <= 5_000) {
-            prepareOutgoing()
-        }
-        val due = if (djWindow == null) untilTransition <= 0
-            else position >= djWindow.endMs || (position >= djWindow.startMs && mainSlot.easingOff())
-        val canHandover = outgoing?.playbackState == Player.STATE_READY
-        val lateDeadline = djWindow != null && position >= djWindow.endMs + 1_500
-        if (due && (canHandover || lateDeadline)) {
+        // Resolve the outgoing stream early; begin its sample alignment before
+        // the published DJ point, then hold the actual queue change until that point.
+        if (untilTransition <= 8_000) prepareOutgoing()
+        val scheduledAt = djWindow?.startMs
+        val due = untilTransition <= 0
+        val canPrepareEarly = scheduledAt != null && untilTransition in 1..4_000 &&
+            outgoing?.playbackState == Player.STATE_READY && mainSlot.mixed
+        if (due || canPrepareEarly) {
             val undo = if (djWindow != null && mediaId != null && position < duration - fadeMs) {
-                DjSession.Undo(mediaId, player.currentMediaItemIndex, position)
+                DjSession.Undo(mediaId, player.currentMediaItemIndex, scheduledAt ?: position)
             } else null
-            changeWith(fadeMs, automatic = true) {
-                pendingUndo = undo
-                player.seekToDefaultPosition(next)
+            changeWith(fadeMs, automatic = true, scheduledAtMs = scheduledAt) {
+                val actualNext = if (player.repeatMode == Player.REPEAT_MODE_ONE) player.currentMediaItemIndex
+                    else player.nextMediaItemIndex
+                if (actualNext >= 0) {
+                    if (djWindow != null) android.util.Log.i(TAG,
+                        "DJ switch scheduled=${djWindow.startMs}ms actual=${player.currentPosition}ms")
+                    pendingUndo = undo
+                    player.seekToDefaultPosition(actualNext)
+                }
             }
         }
     }
 
-    fun changeWith(fadeMs: Int, automatic: Boolean = false, change: () -> Unit) {
+    fun changeWith(fadeMs: Int, automatic: Boolean = false, scheduledAtMs: Long? = null, change: () -> Unit) {
         if (changing) cancelOverlap()
         if (fadeMs <= 0 || !player.isPlaying) {
             cancelOverlap()
@@ -242,8 +292,13 @@ class YouTubeFadeController(
             if (!crossWith(fadeMs, change)) dip(fadeMs, change)
             return
         }
+        if (scheduledAtMs != null && player.currentPosition >= scheduledAtMs) {
+            if (!crossWith(fadeMs, change)) dip(fadeMs, change)
+            return
+        }
         changing = true
         val generation = ++generations
+        val scheduledSettings = djModeStore?.settings?.value
         transition = scope.launch {
             try {
                 tailSlot.fade = 0f
@@ -262,6 +317,9 @@ class YouTubeFadeController(
                     }
                 } ?: false
                 if (!handed) {
+                    // An early alignment failure must not move the published transition.
+                    // The ticker can retry while time remains, or use the buffered path at the point.
+                    if (scheduledAtMs != null && player.currentPosition < scheduledAtMs) return@launch
                     android.util.Log.w(TAG, "no handover, crossing what is buffered instead")
                     retire(tail)
                     val short = fadeMs.coerceAtMost(MAX_BUFFERED_FADE_MS)
@@ -274,6 +332,18 @@ class YouTubeFadeController(
                         dipNow(fadeMs, change)
                     }
                     return@launch
+                }
+                // The aligned tail still carries this song while its main clock advances.
+                // Pause/resume follows syncTailPlayback, and a seek cancels this job.
+                if (scheduledAtMs != null) {
+                    while (player.currentPosition < scheduledAtMs) {
+                        if (djModeStore?.settings?.value != scheduledSettings ||
+                            crossfadeStore?.durationMs() != fadeMs ||
+                            dev.lelonio.square.playback.SleepTimer.atTrackEnd.value ||
+                            DjSession.kept.value == player.currentMediaItem?.mediaId ||
+                            player.repeatMode == Player.REPEAT_MODE_ONE) return@launch
+                        delay(16)
+                    }
                 }
                 // The mixer has silenced the main player and opened the tail.
                 internalChange = true
@@ -422,6 +492,7 @@ class YouTubeFadeController(
     }
 
     fun release() {
+        cancelAnalysis()
         if (DjSession.undoHandler === undoHandler) {
             DjSession.undoHandler = null
             DjSession.publishZone(null)

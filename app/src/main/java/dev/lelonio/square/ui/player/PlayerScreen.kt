@@ -1752,15 +1752,16 @@ fun PlayerScreen(
                             // Tighter on its side, where the column is short.
                             Spacer(Modifier.height(if (sideways) 10.dp else 18.dp))
 
+                            val djZone = rememberDjZone(state, onAnotherDevice)
                             GlassProgressBar(
                                 positionMs = positionMs,
                                 durationMs = state.durationMs,
                                 onSeek = onSeek,
                                 accentColor = GlassInk,
                                 trackColor = GlassInk.copy(alpha = 0.28f),
-                                djZone = rememberDjZone(state, onAnotherDevice),
+                                djZone = djZone,
                             )
-                            TimeRow(positionMs, state.durationMs)
+                            TimeRow(positionMs, state.durationMs, djZone?.let { Math.round(it.start.toDouble() * state.durationMs) })
 
                             Spacer(Modifier.height(if (sideways) 6.dp else 14.dp))
                         }
@@ -2471,12 +2472,17 @@ private fun Modifier.plainClickable(onClick: () -> Unit): Modifier {
 
 /** Isolated so the ticking position recomposes only these two labels. */
 @Composable
-internal fun TimeRow(positionMs: State<Long>, durationMs: Long) {
+internal fun TimeRow(positionMs: State<Long>, durationMs: Long, djAtMs: Long? = null) {
     Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
         Text(
             formatDuration(positionMs.value),
             style = MaterialTheme.typography.bodySmall,
             color = GlassInkDim,
+        )
+        if (djAtMs != null) Text(
+            stringResource(R.string.dj_transition_at, formatDuration(djAtMs)),
+            style = MaterialTheme.typography.bodySmall,
+            color = GlassInk,
         )
         Text(
             formatDuration(durationMs),
@@ -3071,15 +3077,16 @@ private fun SongCard(
             }
         }
         Column(Modifier.widthIn(max = 420.dp).padding(top = 12.dp)) {
+            val djZone = rememberDjZone(state, remote)
             GlassProgressBar(
                 positionMs = positionMs,
                 durationMs = state.durationMs,
                 onSeek = onSeek,
                 accentColor = GlassInk,
                 trackColor = GlassInk.copy(alpha = 0.28f),
-                djZone = rememberDjZone(state, remote),
+                djZone = djZone,
             )
-            TimeRow(positionMs, state.durationMs)
+            TimeRow(positionMs, state.durationMs, djZone?.let { Math.round(it.start.toDouble() * state.durationMs) })
         }
         Text(
             state.title,

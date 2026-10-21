@@ -434,10 +434,8 @@ fun SquareApp(
     val takenOut by viewModel.takenOut.collectAsStateWithLifecycle()
     val context = LocalContext.current
 
-    // The session as it was left, so the player has something to draw before
-    // the media controller connects. Read once, off the saved queue.
-    val seed = remember(context) { savedPlaybackSeed(context) }
-    val localState = rememberPlaybackState(player, seed)
+    // A cold launch stays empty until the live player has a selected song.
+    val localState = rememberPlaybackState(player)
     val local by localState
 
     /**
@@ -978,7 +976,7 @@ fun SquareApp(
                                     fullShuffleUri = null
                                 }
                                 player?.shuffleModeEnabled = true
-                                onPlay(batch, 0, null, false, name, 0L)
+                                onPlay(batch, dev.lelonio.square.backend.youtube.YouTubeShuffleMetadata.firstIndex(batch, preferences.discoveryShuffle.value), null, false, name, 0L)
                             }
                         } else if (batch.isNotEmpty()) {
                             onEnqueueAll(batch)
@@ -990,7 +988,7 @@ fun SquareApp(
                         android.widget.Toast.makeText(context, shuffleEmptyText, android.widget.Toast.LENGTH_LONG).show()
                     } else {
                         player?.shuffleModeEnabled = true
-                        onPlay(tracks, 0, null, false, name, 0L)
+                        onPlay(tracks, dev.lelonio.square.backend.youtube.YouTubeShuffleMetadata.firstIndex(tracks, preferences.discoveryShuffle.value), null, false, name, 0L)
                     }
                 }
             } catch (cancelled: kotlinx.coroutines.CancellationException) {
@@ -2208,7 +2206,7 @@ fun SquareApp(
                                             player?.shuffleModeEnabled = true
                                             onPlay(
                                                 tracks,
-                                                if (tracks.isEmpty()) 0 else tracks.indices.random(),
+                                                dev.lelonio.square.backend.youtube.YouTubeShuffleMetadata.firstIndex(tracks, preferences.discoveryShuffle.value),
                                                 page.uri,
                                                 false,
                                                 source,
@@ -4413,32 +4411,6 @@ private fun UpdatePrompt(
 /** At most one check every six hours, however often the app is opened. */
 private const val UPDATE_CHECK_INTERVAL_MS = 6 * 60 * 60 * 1000L
 
-private fun savedPlaybackSeed(context: android.content.Context): PlaybackState? {
-    val saved = dev.lelonio.square.data.PlaybackStore(context).load() ?: return null
-    val position = saved.shuffleOrder?.getOrNull(saved.index) ?: saved.index
-    val track = saved.tracks.getOrNull(position)?.takeIf { it.name.isNotBlank() } ?: return null
-    return PlaybackState(
-        hasItem = true,
-        mediaId = track.uri,
-        title = track.name,
-        artist = track.artist,
-        // The record too, and not only for the caption under the title: it is
-        // what the other catalogue is searched by. Left out, the first lookup of
-        // every cold start went to the search-by-song fallback and came back
-        // with whichever release ranked first — a single, or a compilation —
-        // which is why a song could open under a different cover each time the
-        // app was started.
-        album = track.album,
-        albumUri = track.albumUri,
-        artworkUrl = track.artworkUrl,
-        explicit = track.explicit,
-        durationMs = track.durationMs,
-        // Not "paused": what it is doing is unknown until the controller
-        // answers, and a play button that flips to pause a moment later reads
-        // as the app having ignored a tap.
-        isBuffering = true,
-    )
-}
 
 /**
  * The search field, living in the bar.

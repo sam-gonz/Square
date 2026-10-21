@@ -4,18 +4,94 @@ import androidx.media3.common.MediaItem
 import androidx.media3.common.Player
 import androidx.media3.common.util.UnstableApi
 import androidx.media3.common.ForwardingPlayer
+import dev.lelonio.square.data.DiscoveryShuffle
+import dev.lelonio.square.data.PreferencesStore
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.flow.collect
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.cancel
+import kotlinx.coroutines.android.asCoroutineDispatcher
 
 /** Keeps the public queue on the main player while its outgoing audio overlaps the next song. */
 @UnstableApi
 class SkipFadePlayer(
     player: Player,
     private val fades: YouTubeFadeController,
+    private val preferences: PreferencesStore? = null,
     /** Zero while the listener has the setting off; see PreferencesStore. */
     private val fadeMs: () -> Int,
 ) : ForwardingPlayer(player) {
 
+    private val shuffleScope = CoroutineScope(SupervisorJob() +
+        android.os.Handler(player.applicationLooper).asCoroutineDispatcher())
+    private var metadataJob: Job? = null
+    private var generation = 0
+    private var preferred = preferences?.discoveryShuffle?.value ?: true
+
+    init {
+        shuffleScope.launch {
+            preferences?.discoveryShuffle?.collect { enabled ->
+                if (preferred != enabled) {
+                    preferred = enabled
+                    reweightUpcoming(keepNext = 0)
+                    requestMetadata()
+                }
+            }
+        }
+    }
+
+    private fun shuffledIndices(indices: List<Int>): List<Int> = if (!preferred) indices.shuffled() else {
+        val signals = indices.map { YouTubeShuffleMetadata.signal(getMediaItemAt(it)) }
+        DiscoveryShuffle.order(signals, java.time.Year.now().value).map(indices::get)
+    }
+
+    private fun reweightUpcoming(keepNext: Int) {
+        if (!shuffleModeEnabled || mediaItemCount == 0) return
+        val exo = wrappedPlayer as? androidx.media3.exoplayer.ExoPlayer ?: return
+        val timeline = currentTimeline
+        val order = mutableListOf<Int>()
+        var at = timeline.getFirstWindowIndex(true)
+        while (at >= 0 && order.size < mediaItemCount) {
+            order += at
+            at = timeline.getNextWindowIndex(at, Player.REPEAT_MODE_OFF, true)
+        }
+        val current = order.indexOf(currentMediaItemIndex)
+        val changeable = order.drop((current + 1 + keepNext).coerceAtMost(order.size))
+            .filterNot { isQueued(getMediaItemAt(it)) }
+        val ranked = shuffledIndices(changeable).iterator()
+        val slots = changeable.toSet()
+        val result = order.map { if (it in slots) ranked.next() else it }
+        exo.setShuffleOrder(androidx.media3.exoplayer.source.ShuffleOrder.DefaultShuffleOrder(result.toIntArray(), System.nanoTime()))
+    }
+
+    private fun requestMetadata() {
+        metadataJob?.cancel()
+        val request = ++generation
+        if (!preferred || !shuffleModeEnabled || dev.lelonio.square.playback.OfflineMode.active.value) return
+        val snapshot = (0 until mediaItemCount).map(::getMediaItemAt)
+        val inPlaybackOrder = mutableListOf<MediaItem>()
+        val timeline = currentTimeline
+        var index = currentMediaItemIndex
+        while (index in snapshot.indices && inPlaybackOrder.size < snapshot.size) {
+            inPlaybackOrder += snapshot[index]
+            index = timeline.getNextWindowIndex(index, Player.REPEAT_MODE_ALL, true)
+        }
+        metadataJob = shuffleScope.launch {
+            YouTubeShuffleMetadata.enrich(inPlaybackOrder)
+            if (request == generation && snapshot.map { it.mediaId } ==
+                (0 until mediaItemCount).map { getMediaItemAt(it).mediaId }) {
+                // Keep the next two tracks stable once shown while enriching the rest in the background.
+                reweightUpcoming(keepNext = 2)
+            }
+        }
+    }
+
     /** Applies the queue panel's desired traversal without changing item indices. */
     fun setQueueOrder(order: List<Int>) {
+        ++generation
+        metadataJob?.cancel()
         val exo = wrappedPlayer as? androidx.media3.exoplayer.ExoPlayer ?: return
         if (order.size != mediaItemCount || order.toSet() != (0 until order.size).toSet()) return
         exo.setShuffleOrder(
@@ -29,6 +105,7 @@ class SkipFadePlayer(
     private fun changing(change: () -> Unit) = fades.changeWith(fadeMs(), change = change)
 
     override fun release() {
+        shuffleScope.cancel()
         fades.release()
         super.release()
         fades.releaseMixer()
@@ -51,6 +128,7 @@ class SkipFadePlayer(
             } else {
                 appendInShuffle(at, mediaItems.size)
             }
+            requestMetadata()
         }
     }
 
@@ -67,6 +145,7 @@ class SkipFadePlayer(
             } else {
                 appendInShuffle(at, mediaItems.size)
             }
+            requestMetadata()
         }
     }
 
@@ -94,7 +173,7 @@ class SkipFadePlayer(
             index = timeline.getNextWindowIndex(index, Player.REPEAT_MODE_OFF, true)
         }
         order.removeAll(added)
-        val newTracksShuffled = (at until at + count).shuffled()
+        val newTracksShuffled = shuffledIndices((at until at + count).toList())
         order.addAll(newTracksShuffled)
         exo.setShuffleOrder(
             androidx.media3.exoplayer.source.ShuffleOrder.DefaultShuffleOrder(order.toIntArray(), System.nanoTime()),
@@ -178,7 +257,7 @@ class SkipFadePlayer(
         val exo = wrappedPlayer as? androidx.media3.exoplayer.ExoPlayer
         if (exo != null && shuffleModeEnabled && mediaItemCount > 0) {
             val current = currentMediaItemIndex.coerceIn(0, mediaItemCount - 1)
-            val rest = (0 until mediaItemCount).filter { it != current }.shuffled()
+            val rest = shuffledIndices((0 until mediaItemCount).filter { it != current })
             val newOrder = listOf(current) + rest
             exo.setShuffleOrder(
                 androidx.media3.exoplayer.source.ShuffleOrder.DefaultShuffleOrder(
@@ -188,6 +267,7 @@ class SkipFadePlayer(
             )
         }
         super.setShuffleModeEnabled(shuffleModeEnabled)
+        requestMetadata()
     }
 
     override fun setMediaItems(mediaItems: MutableList<MediaItem>) =
@@ -205,7 +285,7 @@ class SkipFadePlayer(
         val exo = wrappedPlayer as? androidx.media3.exoplayer.ExoPlayer
         if (exo != null && shuffleModeEnabled && mediaItems.isNotEmpty()) {
             val current = startIndex.coerceIn(0, mediaItems.size - 1)
-            val rest = (0 until mediaItems.size).filter { it != current }.shuffled()
+            val rest = shuffledIndices((0 until mediaItems.size).filter { it != current })
             val newOrder = listOf(current) + rest
             exo.setShuffleOrder(
                 androidx.media3.exoplayer.source.ShuffleOrder.DefaultShuffleOrder(
@@ -214,5 +294,6 @@ class SkipFadePlayer(
                 ),
             )
         }
+        requestMetadata()
     }
 }

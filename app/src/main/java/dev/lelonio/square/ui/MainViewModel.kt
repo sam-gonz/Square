@@ -22,6 +22,8 @@ import dev.lelonio.square.data.IdsDto
 import dev.lelonio.square.data.RemoveTracksRequestDto
 import dev.lelonio.square.data.TrackUriDto
 import dev.lelonio.square.data.CatalogPlaylist
+import dev.lelonio.square.data.LibrarySnapshot
+import dev.lelonio.square.data.LibrarySnapshotStore
 import dev.lelonio.square.data.HomeShelf
 import dev.lelonio.square.data.SpotifyHome
 import dev.lelonio.square.data.CatalogTrack
@@ -2349,7 +2351,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         // next account signs in.
         contextCache.clear()
         viewModelScope.launch { container.contextCache.clear() }
-        librarySnapshotFile().delete()
+        LibrarySnapshotStore.file(getApplication<SquareApplication>()).delete()
         _playlist.value = PlaylistState()
         _feed.value = FeedState()
         // Signed out of Spotify while playing from somewhere else leaves that
@@ -2411,28 +2413,16 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
      * no data it never did. Now the page is the listener's own library from
      * the first frame, and Spotify's answer, when it comes, replaces it.
      */
-    @kotlinx.serialization.Serializable
-    private data class LibrarySnapshot(val displayName: String, val playlists: List<CatalogPlaylist>, val avatarUrl: String? = null)
-
-    private fun librarySnapshotFile() = java.io.File(getApplication<SquareApplication>().filesDir, "library-snapshot.json")
-
     private suspend fun readLibrarySnapshot(): UiState.Ready? = withContext(Dispatchers.IO) {
-        runCatching {
-            val kept = kotlinx.serialization.json.Json { ignoreUnknownKeys = true }
-                .decodeFromString<LibrarySnapshot>(librarySnapshotFile().readText())
-            UiState.Ready(kept.displayName, withLocalFiles(kept.playlists), kept.avatarUrl)
-        }.getOrNull()
+        val kept = LibrarySnapshotStore.readSnapshot(getApplication<SquareApplication>()) ?: return@withContext null
+        UiState.Ready(kept.displayName, withLocalFiles(kept.playlists), kept.avatarUrl)
     }
 
     private suspend fun keepLibrarySnapshot(ready: UiState.Ready) = withContext(Dispatchers.IO) {
-        runCatching {
-            librarySnapshotFile().writeText(
-                kotlinx.serialization.json.Json.encodeToString(
-                    LibrarySnapshot.serializer(),
-                    LibrarySnapshot(ready.displayName, ready.playlists, ready.avatarUrl),
-                ),
-            )
-        }
+        LibrarySnapshotStore.write(
+            getApplication<SquareApplication>(),
+            LibrarySnapshot(ready.displayName, ready.playlists, ready.avatarUrl),
+        )
     }
 
     private fun launchRefresh() = viewModelScope.launch {
@@ -2448,18 +2438,20 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             val name = (backend.authState.value as? BackendAuthState.LoggedIn)?.displayName
             runCatching { backend.playlists() }
                 .onSuccess { playlists ->
-                    _state.value = UiState.Ready(
+                    val ready = UiState.Ready(
                         displayName = name.orEmpty(),
                         playlists = withLocalFiles(playlists),
                     )
+                    _state.value = ready
+                    if (playlists.isNotEmpty()) keepLibrarySnapshot(ready)
                 }
                 .onFailure {
                     android.util.Log.w(TAG, "youtube library unavailable: ${describe(it)}")
                     // Not a failure worth a whole error screen: the library is
                     // the one part that needs an account, and everything else
                     // on this backend works without one.
-                    _state.value =
-                        UiState.Ready(displayName = name.orEmpty(), playlists = withLocalFiles(emptyList()))
+                    val fallback = readLibrarySnapshot()
+                    _state.value = fallback ?: UiState.Ready(displayName = name.orEmpty(), playlists = withLocalFiles(emptyList()))
                 }
             // The other two shelves of the same library. They read the active
             // backend and empty themselves for one that keeps neither, which is
